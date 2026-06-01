@@ -342,6 +342,21 @@ async def list_sessions(request):
                 meta = {}
         if not cams and not sj.exists():
             continue  # skip empties
+        # sync residual summary (if this session has been synced)
+        off = d / "sync" / "offsets.json"
+        worst, verdict, frame_ms = None, None, None
+        if off.exists():
+            try:
+                data = json.loads(off.read_text())
+                frame_ms = round(1000.0 / _session_fps(d), 1)
+                r = data.get("residual_ms") or {}
+                ref = data.get("reference")
+                worst = max((abs(v) for k, v in r.items() if k != ref), default=None)
+                if worst is not None:
+                    verdict = ("sub-frame" if worst <= frame_ms / 2 else
+                               "within one frame" if worst <= frame_ms else "off by > one frame")
+            except Exception:
+                pass
         out.append({
             "session_id": d.name,
             "title": meta.get("title", ""),
@@ -351,7 +366,10 @@ async def list_sessions(request):
             "cameras": cams,
             "n_cameras": len(cams),
             "has_report": (d / "report.html").exists(),
-            "has_sync": (d / "sync" / "offsets.json").exists(),
+            "has_sync": off.exists(),
+            "residual_ms": worst,
+            "verdict": verdict,
+            "frame_ms": frame_ms,
         })
     return web.json_response({"sessions": out}, headers=NO_CACHE)
 

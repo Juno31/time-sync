@@ -114,8 +114,8 @@
         <input type="checkbox" id="autoSync" checked style="width:auto;"> Auto-sync &amp; build report after upload
       </label>
       <div class="syncmsg" id="autoState"></div>
-      <table><thead><tr><th>Session</th><th>Cams</th><th>Sync report</th></tr></thead>
-      <tbody id="sessionsBody"><tr><td colspan="3" class="muted">loading…</td></tr></tbody></table>
+      <table><thead><tr><th>Session</th><th>Cams</th><th>Sync residual</th><th>Report</th></tr></thead>
+      <tbody id="sessionsBody"><tr><td colspan="4" class="muted">loading…</td></tr></tbody></table>
       <p class="muted">When every camera that recorded a session finishes uploading, the host runs the
         time sync and builds the report automatically. Toggle off to do it manually with the buttons below.</p>
     </div>
@@ -184,12 +184,23 @@ setInterval(() => {
   }
 }, 2000);
 
+// render the residual cell from a session record
+function residCell(s) {
+  if (!s.has_sync) return '<span class="muted">not synced</span>';
+  if (s.residual_ms == null) return '<span class="muted">n/a (1 cam)</span>';
+  const ok = s.verdict !== "off by > one frame";
+  const col = ok ? "#5ad17a" : "#ef6b6b";
+  const frame = s.frame_ms != null ? ` <span class="muted">/ ${s.frame_ms} ms frame</span>` : "";
+  return `<span style="color:${col};font-weight:600">${s.residual_ms.toFixed(0)} ms</span>${frame}` +
+         `<div class="muted">${s.verdict || ""}</div>`;
+}
+
 async function loadSessions() {
   const tb = $("sessionsBody");
   try {
     const d = await (await fetch("/sessions?t=" + Date.now(), { cache: "no-store" })).json();
     const ss = d.sessions || [];
-    if (!ss.length) { tb.innerHTML = '<tr><td colspan="3" class="muted">no recordings yet</td></tr>'; return; }
+    if (!ss.length) { tb.innerHTML = '<tr><td colspan="4" class="muted">no recordings yet</td></tr>'; return; }
     tb.innerHTML = ss.map(s => {
       const id = s.session_id, idJs = id.replace(/'/g, "\\'");
       const name = s.title ? `${s.title}` : id;
@@ -204,10 +215,11 @@ async function loadSessions() {
       } else {
         action = '<span class="muted">no video</span>';
       }
-      return `<tr><td>${name}${sub}</td><td>${s.n_cameras}</td><td>${action}</td></tr>`;
+      return `<tr><td>${name}${sub}</td><td>${s.n_cameras}</td>` +
+             `<td class="residcell">${residCell(s)}</td><td>${action}</td></tr>`;
     }).join("");
   } catch (e) {
-    tb.innerHTML = '<tr><td colspan="3" class="muted">could not load sessions — ' +
+    tb.innerHTML = '<tr><td colspan="4" class="muted">could not load sessions — ' +
       'is the host running the latest code? (restart it after updating)</td></tr>';
   }
 }
@@ -234,6 +246,10 @@ async function syncSession(id, btn) {
       msg.textContent = `synced · worst residual ${j.worst_residual_ms.toFixed(0)} ms ` +
         `(${j.verdict}; frame = ${j.frame_ms} ms). Open Report for details.`;
     }
+    // update the residual column for this row from the /sync result
+    var row = btn.closest("tr"), rc = row && row.querySelector(".residcell");
+    if (rc) rc.innerHTML = residCell({ has_sync: true, residual_ms: j.worst_residual_ms,
+                                       verdict: j.verdict, frame_ms: j.frame_ms });
   } catch (e) {
     msg.style.color = "#ef6b6b";
     msg.textContent = "sync error — could not reach the host";
