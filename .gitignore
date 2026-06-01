@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# TLS material — never commit private keys / certs
+certs/
+*.pem
+*.key
+
+# Recordings & generated artifacts (per-machine, large)
+sessions/
+report/*.html
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+*.swp

@@ -1,0 +1,211 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>camera time sync — documentation</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:#0b0d10; color:#e7eaee; line-height:1.55; }
+  .wrap { max-width:960px; margin:0 auto; padding:34px 24px 90px; }
+  h1 { font-size:25px; margin:0 0 2px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:#8b95a1; margin:34px 0 10px;
+       border-top:1px solid #1c2128; padding-top:18px; }
+  h3 { font-size:14px; margin:18px 0 6px; color:#cfd6de; }
+  .sub { color:#8b95a1; font-size:13px; }
+  p, li { font-size:13.5px; }
+  code { background:#1b2129; padding:1px 6px; border-radius:6px; font-size:12.5px; color:#b9c2cc; }
+  pre { background:#11151a; border:1px solid #222; border-radius:10px; padding:14px 16px; overflow:auto;
+        font:12.5px/1.55 ui-monospace,monospace; color:#b9c2cc; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; }
+  th,td { text-align:left; padding:8px 11px; border-bottom:1px solid #1c2128; font-size:12.5px; vertical-align:top; }
+  th { color:#8b95a1; font-weight:600; }
+  td code { white-space:nowrap; }
+  .mono { font-family:ui-monospace,monospace; color:#6aa9ff; white-space:nowrap; }
+  .pill { display:inline-block; font:600 11px ui-monospace,monospace; padding:1px 8px; border-radius:999px;
+          border:1px solid; }
+  .ok { color:#5ad17a; border-color:#5ad17a55; background:#5ad17a14; }
+  .warn { color:#e2b340; border-color:#e2b34055; background:#e2b34014; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .card { background:#11151a; border:1px solid #222; border-radius:12px; padding:14px 16px; }
+  .muted { color:#8b95a1; font-size:12px; }
+  ul { margin:6px 0; padding-left:20px; } li { margin:3px 0; }
+  .flow { font-family:ui-monospace,monospace; font-size:12px; color:#cfd6de; }
+  @media(max-width:680px){ .grid2{grid-template-columns:1fr;} }
+</style></head><body><div class="wrap">
+
+<h1>camera time sync</h1>
+<div class="sub">Local app to control time-synced video recording across multiple iPhones (web client),
+upload clips to a host computer, and synchronize them in post for 2D pose estimation / 3D reconstruction.</div>
+
+<h2>1 · Overview</h2>
+<p>A single host process (your Mac) serves a browser-based control UI and a phone capture page over the
+local network. Each iPhone records independently in Safari; the host coordinates a synchronized start and a
+shared <b>clap</b>, then aligns the clips offline. The design mirrors OpenCap (PLOS Comput Biol 2023): phones
+record independently and real synchronization is recovered in <b>post-processing</b>, not at capture time.</p>
+
+<h3>Hard constraints (why it is built this way)</h3>
+<ul>
+<li><b>Client = web/PWA in iOS Safari</b> (no native app). Safari cannot expose per-frame hardware capture
+timestamps, cannot lock fps, and stops recording on screen lock. <code>MediaRecorder</code> output is
+variable-frame-rate (VFR).</li>
+<li><b>Real sync accuracy comes from the post-hoc layer.</b> All streams are treated as VFR and resampled to
+a common timeline.</li>
+<li><b>HTTPS is mandatory</b> — iOS blocks <code>getUserMedia</code> outside a secure context, even on the
+LAN. A locally-trusted cert (mkcert) must be installed on each phone.</li>
+<li><b>Minimal stack:</b> one <code>app.py</code> (aiohttp) = HTTPS + WebSocket hub + upload-to-disk; vanilla
+HTML/JS UIs; filesystem only — no database, framework, or build step. Offline analysis in <code>sync.py</code>
+/ <code>calibrate.py</code>.</li>
+</ul>
+
+<h2>2 · Architecture</h2>
+<div class="grid2">
+<div class="card"><h3>Components</h3>
+<ul>
+<li><span class="mono">app.py</span> — aiohttp host: serves pages, runs the WS hub (registry, clock-sync,
+synchronized trigger, live preview relay), accepts chunked uploads.</li>
+<li><span class="mono">web/control/</span> — control UI (pairing QR, config, session metadata, roster,
+live preview, reports panel, host status).</li>
+<li><span class="mono">web/capture/</span> — phone capture page: <code>getUserMedia</code> +
+<code>MediaRecorder</code> (video/mp4), per-frame timestamps via <code>requestVideoFrameCallback</code>,
+<code>wakeLock</code>, clap cue, low-rate preview.</li>
+<li><span class="mono">sync.py</span> — post-hoc alignment (clap cross-correlation + timestamps + ffmpeg).</li>
+<li><span class="mono">calibrate.py</span> — OpenCap-style camera calibration (checkerboard / reference object).</li>
+<li><span class="mono">session_report.py</span> — per-recording HTML report (sync verdict + clap diagnostic).</li>
+<li><span class="mono">report.py</span> — overall procedure report across all steps.</li>
+</ul></div>
+<div class="card"><h3>Data flow</h3>
+<p class="flow">phones (Safari)<br>
+&nbsp;&nbsp;│ WSS register + clock-sync<br>
+&nbsp;&nbsp;│ ◄── synchronized start (T0) + clap cue<br>
+&nbsp;&nbsp;▼ record locally (VFR)<br>
+&nbsp;&nbsp;│ HTTPS chunked upload<br>
+&nbsp;&nbsp;▼<br>
+host disk: sessions/&lt;id&gt;/&lt;cam&gt;/<br>
+&nbsp;&nbsp;▼ sync.py (clap x-corr → CFR)<br>
+aligned clips + offsets.json + report.html<br>
+&nbsp;&nbsp;▼<br>
+opencap-core / Pose2Sim → 3D</p>
+<p class="muted">Shared time base = host wall-clock (ms). Phones estimate their offset to it via an NTP-like
+ping/pong.</p></div>
+</div>
+
+<h2>3 · Running (UI-first, minimal terminal)</h2>
+<ol>
+<li><b>One-time cert setup:</b> install mkcert on the Mac (<code>brew install mkcert nss</code> &rarr;
+<code>mkcert -install</code>), then trust the mkcert root CA on each iPhone (AirDrop <code>rootCA.pem</code>
+&rarr; install profile &rarr; <i>Settings → General → About → Certificate Trust Settings</i> → enable full trust).</li>
+<li><b>Launch:</b> double-click <span class="mono">start.command</span> in Finder. It creates the venv on
+first run, starts the host, opens the control UI, and <b>auto-refreshes the TLS cert if the LAN IP changed</b>
+(no <code>setup_certs.sh</code> re-run). Default: <span class="mono">https://&lt;LAN-IP&gt;:8443/</span>.</li>
+<li><b>Pair phones:</b> on each iPhone (same Wi-Fi), open Safari and scan the QR in the control UI &rarr;
+allow camera &amp; mic. The phone appears in the Cameras roster with a live clock offset.</li>
+<li><b>Record:</b> set config → Push config → fill session metadata → <b>Start (synchronized)</b> → clap once
+at the cue → <b>Stop</b>. Clips upload automatically.</li>
+<li><b>Report:</b> in the <b>Recordings &amp; sync reports</b> panel, click <b>View report</b>.</li>
+</ol>
+<p class="muted">Network note: campus/eduroam Wi-Fi often blocks device-to-device traffic. If phones can't
+reach the host, use one iPhone's Personal Hotspot for the Mac + the other phone.</p>
+
+<h2>4 · HTTP routes</h2>
+<table>
+<thead><tr><th>Method · Path</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>GET /health</code></td><td>Liveness + server clock (<code>server_ms</code>), camera/control counts.</td></tr>
+<tr><td><code>GET /</code></td><td>Control UI.</td></tr>
+<tr><td><code>GET /capture</code></td><td>Phone capture page (opened via the paired URL/QR).</td></tr>
+<tr><td><code>GET /pairing</code></td><td>Capture URL + token the control UI renders as a QR.</td></tr>
+<tr><td><code>GET /qr?data=</code></td><td>SVG QR for arbitrary text.</td></tr>
+<tr><td><code>GET /host</code></td><td>Host status: LAN IP, port, scheme, HTTPS on/off, mkcert availability.</td></tr>
+<tr><td><code>POST /session</code></td><td>Create/persist session metadata → <code>session.json</code>.</td></tr>
+<tr><td><code>GET /session/{id}</code></td><td>Read one session's metadata.</td></tr>
+<tr><td><code>GET /sessions</code></td><td>List recordings (id, title, cameras, has_report) for the UI panel.</td></tr>
+<tr><td><code>POST /sync?session=&amp;fps=</code></td><td>Run post-hoc time sync on a session's videos; returns residual/method/confidence JSON.</td></tr>
+<tr><td><code>GET /report?session=&amp;force=</code></td><td>Build (if needed) + serve the per-recording report HTML.</td></tr>
+<tr><td><code>POST /upload</code></td><td>Chunked, resumable, hash-verified upload (headers <code>X-Session/X-Device/X-Filename/X-Offset/X-Final/X-SHA256</code>).</td></tr>
+<tr><td><code>GET /ws</code></td><td>WebSocket hub (cameras + control clients).</td></tr>
+</tbody></table>
+
+<h2>5 · WebSocket protocol</h2>
+<table>
+<thead><tr><th>Message</th><th>Direction</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>register</code> / <code>registered</code> / <code>hello</code></td><td>client→host / host→client</td><td>Join as <code>camera</code> or <code>control</code>; host assigns device id and sends server time.</td></tr>
+<tr><td><code>clock_ping</code> / <code>clock_pong</code></td><td>camera↔host</td><td>NTP-like RTT round-trip for offset estimation.</td></tr>
+<tr><td><code>clock_report</code></td><td>camera→host</td><td>Camera reports its computed offset/RTT/jitter (shown in roster).</td></tr>
+<tr><td><code>roster</code></td><td>host→control</td><td>Live device list + current session.</td></tr>
+<tr><td><code>config</code></td><td>control→cameras</td><td>Push capture config (resolution, fps hint, facing).</td></tr>
+<tr><td><code>start</code> / <code>started</code></td><td>host→all</td><td>Synchronized trigger at a future <code>t0_server_ms</code> (+3 s lead) with a clap time (+5 s).</td></tr>
+<tr><td><code>stop</code> / <code>stopped</code></td><td>host→all</td><td>End recording; control UI refreshes the recordings list.</td></tr>
+<tr><td><code>preview</code> / <code>preview_on</code> / <code>preview_off</code></td><td>camera↔host↔control</td><td>Low-rate JPEG monitor, gated on whether anyone is watching.</td></tr>
+</tbody></table>
+
+<h2>6 · Synchronization method (Step 8)</h2>
+<p>Layered, robust-first. <span class="mono">sync.py</span> ingests a session and writes
+<code>sessions/&lt;id&gt;/sync/offsets.json</code> + CFR clips under <code>sync/aligned/</code>:</p>
+<ol>
+<li><b>Audio clap cross-correlation (primary):</b> the single physical clap is recorded by every phone's mic;
+cross-correlating the rectified, smoothed audio envelopes (1 kHz) gives a sharp, sub-frame relative offset.
+Uses the whole transient pattern, so it is robust to echoes / multiple claps.</li>
+<li><b>Per-frame timestamp offset (independent prior / fallback):</b> first server-clock stamp per camera from
+<code>frames.json</code>. Used as a sanity cross-check against the audio result, and as fallback when audio is unusable.</li>
+<li><b>Render:</b> ffmpeg resamples each VFR clip to a common CFR and trims so the claps coincide.</li>
+<li><b>Verify (<code>--verify</code>):</b> re-extracts audio from the aligned clips and re-measures the residual
+inter-camera offset → the headline accuracy number.</li>
+</ol>
+<p class="muted">Optional, not required for temporal alignment: keypoint-velocity cross-correlation (OpenCap)
+as a secondary refinement — documented plug-in point in <code>sync.py</code>.</p>
+
+<h2>7 · Per-session file layout</h2>
+<pre>sessions/&lt;session_id&gt;/
+├─ session.json            title, subject, trial, notes, tags, config, cameras
+├─ &lt;camera_label&gt;/
+│   ├─ video.mp4           the recording (VFR)
+│   ├─ frames.json         per-frame server-clock timestamps
+│   └─ clock.json          camera↔host clock-offset record
+├─ sync/
+│   ├─ offsets.json        per-camera offset, method, confidence, residual_ms
+│   └─ aligned/&lt;label&gt;.mp4  CFR clips on a common timeline
+└─ report.html            per-recording sync + clap diagnostic (served at /report)</pre>
+
+<h2>8 · Reports</h2>
+<p><b>Per-recording</b> (<span class="mono">session_report.py</span> → <code>report.html</code>, opened from
+the UI): a sync-error verdict vs the frame period <span class="pill ok">≤ ½ frame = sub-frame</span>
+<span class="pill warn">≤ 1 frame = adequate</span>, the clap-detection diagnostic (audio envelopes +
+normalized cross-correlation curve, inline SVG), a Step-4 capture table (frames, monotonic timestamps,
+effective fps), and the independent audio-vs-timestamp cross-check.</p>
+<p><b>Overall procedure report</b> (<span class="mono">report.py</span> →
+<code>report/procedure_report.html</code>): every step, its validation gate and outcome, the latest automated
+test run, sync-accuracy plots, and the failure/history log.</p>
+
+<h2>9 · Calibration (Step 7b)</h2>
+<p><span class="mono">calibrate.py</span> recovers per-camera intrinsics + extrinsics for 3D triangulation:</p>
+<table>
+<thead><tr><th>Subcommand</th><th>Method</th></tr></thead>
+<tbody>
+<tr><td><code>intrinsics</code></td><td>Checkerboard <code>findChessboardCorners</code> + <code>calibrateCamera</code>.</td></tr>
+<tr><td><code>extrinsics-board</code></td><td>Shared checkerboard via <code>solvePnP</code> (<b>primary</b>).</td></tr>
+<tr><td><code>extrinsics-object</code></td><td>Reference object / known 3D control points, manual point-picking (<b>alternative</b>).</td></tr>
+</tbody></table>
+<p class="muted">Output is opencap-core-compatible so 3D reconstruction (DLT triangulation → OpenSim) runs in
+opencap-core / Pose2Sim — not reimplemented here.</p>
+
+<h2>10 · Validation status</h2>
+<table>
+<thead><tr><th>Area</th><th>State</th></tr></thead>
+<tbody>
+<tr><td>Host-side smoke (<code>tests/smoke.py</code>)</td><td><span class="pill ok">18/18</span> health, pairing/QR, WS registry+roster, clock, trigger, config, preview, session, upload, /sessions, /report.</td></tr>
+<tr><td>Offline sync (<code>tests/test_sync.py</code>)</td><td><span class="pill ok">2/2</span> synthetic +300 ms recovered, residual 0.0 ms.</td></tr>
+<tr><td>Calibration (<code>tests/test_calib.py</code>)</td><td><span class="pill ok">5/5</span> intrinsics exact, extrinsic reproj 0.0 px.</td></tr>
+<tr><td>Steps 1 &amp; 4 on device</td><td><span class="pill ok">PASS</span> real 2-iPhone session over HTTPS; frames.json monotonic, clap present, effective fps reported.</td></tr>
+<tr><td>Step 8 real footage</td><td><span class="pill warn">−22 ms</span> synchronized trigger ~8 ms; post-alignment residual ≈ 0.66 frame @30fps (within one frame).</td></tr>
+<tr><td>Calibration on real footage (7b)</td><td><span class="pill warn">deferred</span> needs a printed checkerboard.</td></tr>
+</tbody></table>
+
+<h2>Dependencies</h2>
+<p><b>Host (serve):</b> <code>aiohttp</code>, <code>segno</code>. <b>Analysis (reports / sync / calibration):</b>
+<code>numpy</code>, <code>scipy</code>, <code>opencv-python</code>, and <code>ffmpeg</code>/<code>ffprobe</code>
+on PATH. <b>Cert:</b> <code>mkcert</code> (one-time).</p>
+
+<p class="muted" style="margin-top:30px">Document reflects the implementation as of 2026-06-01. Source of truth:
+<code>app.py</code>, <code>sync.py</code>, <code>session_report.py</code>, <code>calibrate.py</code>,
+and <code>docs/</code>.</p>
+
+</div></body></html>

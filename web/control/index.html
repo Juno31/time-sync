@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control — camera time sync</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:#0b0d10; color:#e7eaee; }
+  header { padding:14px 18px; border-bottom:1px solid #222; display:flex; gap:16px; align-items:center; }
+  h1 { font-size:16px; margin:0; font-weight:650; }
+  main { display:grid; grid-template-columns: 320px 1fr; gap:18px; padding:18px; align-items:start; }
+  .card { background:#11151a; border:1px solid #222; border-radius:12px; padding:16px; }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#8b95a1; margin:0 0 12px; }
+  label { display:block; font-size:12px; color:#9aa4af; margin:10px 0 4px; }
+  input, select, textarea { width:100%; background:#1b2129; color:#e7eaee; border:1px solid #2a313b;
+    border-radius:8px; padding:8px 10px; font-size:14px; }
+  .row { display:flex; gap:10px; } .row > * { flex:1; }
+  button { border:0; border-radius:8px; padding:10px 14px; font-size:14px; font-weight:600; cursor:pointer; }
+  .start { background:#2f6df6; color:#fff; } .stop { background:#7a2230; color:#fff; }
+  .ghost { background:#1b2129; color:#e7eaee; border:1px solid #2a313b; }
+  .mini { padding:5px 11px; font-size:12px; }
+  a.rep { display:inline-block; padding:5px 11px; font-size:12px; background:#1b2129;
+    border:1px solid #2a313b; border-radius:8px; color:#e7eaee; text-decoration:none; margin-left:6px; }
+  a.rep:hover { border-color:#3a8bff; }
+  .syncmsg { font-size:12px; margin-top:6px; color:#8b95a1; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid #1c2128; }
+  th { color:#8b95a1; font-weight:600; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px; }
+  .g{background:#5ad17a;} .y{background:#e2b340;} .r{background:#ef6b6b;}
+  #qr { background:#fff; padding:8px; border-radius:10px; width:fit-content; }
+  #qr svg { display:block; width:200px; height:200px; }
+  .muted { color:#8b95a1; font-size:12px; }
+  #banner { font-size:28px; font-weight:800; text-align:center; padding:14px;
+    border-radius:10px; background:#161b22; margin-bottom:12px; display:none; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+  .tile { background:#000; border:1px solid #222; border-radius:10px; overflow:hidden; position:relative; }
+  .tile img { width:100%; display:block; aspect-ratio:4/3; object-fit:cover; background:#000; }
+  .tile .cap { position:absolute; left:8px; bottom:8px; font-size:12px; background:rgba(0,0,0,.55);
+    padding:2px 8px; border-radius:999px; }
+  .tile .stale { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:#8b95a1; font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>camera time sync</h1>
+  <span class="muted" id="wsState">connecting…</span>
+  <span class="muted" id="hostState"></span>
+  <span class="muted" id="serverState"></span>
+</header>
+<main>
+  <div>
+    <div class="card">
+      <h2>Pair a phone</h2>
+      <div id="qr"></div>
+      <p class="muted" id="captureUrl" style="word-break:break-all;"></p>
+      <p class="muted">Open this on each iPhone (Safari). HTTPS + trusted cert required for camera.</p>
+    </div>
+    <div class="card" style="margin-top:18px;">
+      <h2>Capture config</h2>
+      <div class="row">
+        <div><label>Width</label><input id="cfgW" type="number" value="1920"></div>
+        <div><label>Height</label><input id="cfgH" type="number" value="1080"></div>
+      </div>
+      <div class="row">
+        <div><label>fps (requested)</label><input id="cfgFps" type="number" value="60"></div>
+        <div><label>Camera</label>
+          <select id="cfgFacing"><option value="environment">back</option>
+          <option value="user">front</option></select></div>
+      </div>
+      <button class="ghost" style="margin-top:12px;width:100%" onclick="pushConfig()">Push config to all</button>
+      <p class="muted">iOS treats fps as a hint; streams are VFR and resampled in post.</p>
+    </div>
+  </div>
+
+  <div>
+    <div id="banner"></div>
+
+    <!-- 1. Cameras & live preview (merged) -->
+    <div class="card">
+      <h2>Cameras &amp; live preview <span class="muted" style="text-transform:none;font-weight:400;">(~3 fps monitor)</span></h2>
+      <table><thead><tr><th>Label</th><th>Status</th><th>Clock offset</th><th>RTT</th><th>Jitter</th></tr></thead>
+      <tbody id="roster"><tr><td colspan="5" class="muted">no cameras connected</td></tr></tbody></table>
+      <div class="grid" id="previews" style="margin-top:14px;"><p class="muted" id="previewEmpty">no streams yet</p></div>
+    </div>
+
+    <!-- 2. Session -->
+    <div class="card" style="margin-top:18px;">
+      <h2>Session</h2>
+      <label>Title</label><input id="mTitle" placeholder="e.g. gait_pilot_01">
+      <div class="row">
+        <div><label>Subject ID</label><input id="mSubject"></div>
+        <div><label>Trial</label><input id="mTrial"></div>
+      </div>
+      <label>Tags (comma-separated)</label><input id="mTags">
+      <label>Notes</label><textarea id="mNotes" rows="2"></textarea>
+      <div class="row" style="margin-top:14px;">
+        <button class="start" id="btnStart" onclick="startRec()">● Start (synchronized)</button>
+        <button class="stop"  id="btnStop"  onclick="stopRec()" disabled>■ Stop</button>
+      </div>
+      <p class="muted" id="sessionState"></p>
+    </div>
+
+    <!-- 3. Recordings & sync reports -->
+    <div class="card" style="margin-top:18px;">
+      <h2>Recordings & sync reports
+        <button class="ghost" style="float:right;margin-top:-4px;padding:4px 10px;font-size:12px"
+          onclick="loadSessions()">Refresh</button></h2>
+      <label style="display:flex;align-items:center;gap:8px;margin:0 0 10px;color:#cfd6de;font-size:13px;">
+        <input type="checkbox" id="autoSync" checked style="width:auto;"> Auto-sync &amp; build report after upload
+      </label>
+      <div class="syncmsg" id="autoState"></div>
+      <table><thead><tr><th>Session</th><th>Cams</th><th>Sync report</th></tr></thead>
+      <tbody id="sessionsBody"><tr><td colspan="3" class="muted">loading…</td></tr></tbody></table>
+      <p class="muted">When every camera that recorded a session finishes uploading, the host runs the
+        time sync and builds the report automatically. Toggle off to do it manually with the buttons below.</p>
+    </div>
+  </div>
+</main>
+
+<script>
+let ws, lastRoster = [], started = false;
+const $ = id => document.getElementById(id);
+
+async function loadHost() {
+  try {
+    const h = await (await fetch("/host")).json();
+    const secure = h.https ? "🔒 HTTPS" : "⚠ HTTP (iOS camera needs HTTPS)";
+    $("hostState").textContent = `· ${secure} · ${h.lan_ip}:${h.port}`;
+    $("hostState").style.color = h.https ? "#5ad17a" : "#e2b340";
+  } catch (e) {}
+}
+
+async function loadPairing() {
+  const p = await (await fetch("/pairing")).json();
+  $("captureUrl").textContent = p.capture_url;
+  $("qr").innerHTML = await (await fetch("/qr?data=" + encodeURIComponent(p.capture_url))).text();
+}
+
+function renderRoster(cameras) {
+  lastRoster = cameras;
+  const tb = $("roster");
+  if (!cameras.length) { tb.innerHTML = '<tr><td colspan="5" class="muted">no cameras connected</td></tr>'; return; }
+  tb.innerHTML = cameras.map(c => {
+    const cl = c.clock || {};
+    const j = cl.jitter_ms;
+    const dot = j==null ? "y" : (j<15 ? "g" : (j<40 ? "y":"r"));
+    const f = (v,u)=> v==null ? "—" : v.toFixed(u===0?0:1)+(u===0?"":"")+(u? "":"");
+    return `<tr><td>${c.label}</td>
+      <td><span class="dot ${c.status==='recording'?'r':c.status==='uploaded'?'g':'y'}"></span>${c.status}</td>
+      <td>${cl.offset_ms==null?"—":cl.offset_ms.toFixed(1)+" ms"}</td>
+      <td>${cl.rtt_ms==null?"—":cl.rtt_ms.toFixed(0)+" ms"}</td>
+      <td><span class="dot ${dot}"></span>${cl.jitter_ms==null?"—":cl.jitter_ms.toFixed(1)+" ms"}</td></tr>`;
+  }).join("");
+}
+
+const previewTiles = {};   // device_id -> {img, ts}
+function renderPreview(m) {
+  const empty = $("previewEmpty"); if (empty) empty.remove();
+  let t = previewTiles[m.device_id];
+  if (!t) {
+    const tile = document.createElement("div"); tile.className = "tile";
+    const img = document.createElement("img");
+    const cap = document.createElement("div"); cap.className = "cap"; cap.textContent = m.label;
+    tile.appendChild(img); tile.appendChild(cap);
+    $("previews").appendChild(tile);
+    t = previewTiles[m.device_id] = { img, cap, ts: 0 };
+  }
+  t.img.src = m.data; t.cap.textContent = m.label; t.ts = Date.now();
+}
+// drop tiles for cameras that stopped sending (disconnected)
+setInterval(() => {
+  const live = new Set(lastRoster.map(c => c.device_id));
+  for (const [id, t] of Object.entries(previewTiles)) {
+    if (!live.has(id) || Date.now() - t.ts > 5000) { t.img.closest(".tile").remove(); delete previewTiles[id]; }
+  }
+  if (!Object.keys(previewTiles).length && !$("previewEmpty")) {
+    const p = document.createElement("p"); p.className = "muted"; p.id = "previewEmpty";
+    p.textContent = "no streams yet"; $("previews").appendChild(p);
+  }
+}, 2000);
+
+async function loadSessions() {
+  const tb = $("sessionsBody");
+  try {
+    const d = await (await fetch("/sessions?t=" + Date.now(), { cache: "no-store" })).json();
+    const ss = d.sessions || [];
+    if (!ss.length) { tb.innerHTML = '<tr><td colspan="3" class="muted">no recordings yet</td></tr>'; return; }
+    tb.innerHTML = ss.map(s => {
+      const id = s.session_id, idJs = id.replace(/'/g, "\\'");
+      const name = s.title ? `${s.title}` : id;
+      const sub = s.title ? `<div class="muted">${id}</div>` : "";
+      let action;
+      if (s.n_cameras >= 1) {
+        const syncLabel = s.has_sync ? "Re-sync" : "Sync";
+        action =
+          `<button class="ghost mini" onclick="syncSession('${idJs}', this)">${syncLabel}</button>` +
+          `<a class="rep" href="/report?session=${encodeURIComponent(id)}" target="_blank" rel="noopener">Report</a>` +
+          `<div class="syncmsg"></div>`;
+      } else {
+        action = '<span class="muted">no video</span>';
+      }
+      return `<tr><td>${name}${sub}</td><td>${s.n_cameras}</td><td>${action}</td></tr>`;
+    }).join("");
+  } catch (e) {
+    tb.innerHTML = '<tr><td colspan="3" class="muted">could not load sessions — ' +
+      'is the host running the latest code? (restart it after updating)</td></tr>';
+  }
+}
+
+// Run post-hoc time synchronization on a session's videos, then show the verdict inline.
+async function syncSession(id, btn) {
+  const cell = btn.closest("td");
+  const msg = cell.querySelector(".syncmsg");
+  btn.disabled = true;
+  msg.style.color = "#e2b340";
+  msg.textContent = "syncing… (clap cross-correlation + ffmpeg align, ~10s)";
+  try {
+    const r = await fetch("/sync?session=" + encodeURIComponent(id), { method: "POST", cache: "no-store" });
+    const j = await r.json();
+    if (!j.ok) {
+      msg.style.color = "#ef6b6b";
+      msg.textContent = "sync failed: " + (j.error || ("HTTP " + r.status));
+    } else if (j.worst_residual_ms == null) {
+      msg.style.color = "#8b95a1";
+      msg.textContent = "synced — need ≥2 cameras to measure inter-camera residual";
+    } else {
+      const ok = j.verdict !== "off by > one frame";
+      msg.style.color = ok ? "#5ad17a" : "#ef6b6b";
+      msg.textContent = `synced · worst residual ${j.worst_residual_ms.toFixed(0)} ms ` +
+        `(${j.verdict}; frame = ${j.frame_ms} ms). Open Report for details.`;
+    }
+  } catch (e) {
+    msg.style.color = "#ef6b6b";
+    msg.textContent = "sync error — could not reach the host";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function config() {
+  return { width:+$("cfgW").value, height:+$("cfgH").value,
+           fps:+$("cfgFps").value, facing:$("cfgFacing").value };
+}
+function pushConfig(){ ws.send(JSON.stringify({ type:"config", config: config() })); }
+
+async function startRec() {
+  // 1) persist session metadata, 2) trigger synchronized start
+  const body = { title:$("mTitle").value, subject:$("mSubject").value, trial:$("mTrial").value,
+    notes:$("mNotes").value, tags:$("mTags").value.split(",").map(s=>s.trim()).filter(Boolean),
+    config: config() };
+  const s = await (await fetch("/session", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(body)})).json();
+  $("sessionState").textContent = "session: " + s.session_id;
+  ws.send(JSON.stringify({ type:"start" }));
+}
+function stopRec(){ ws.send(JSON.stringify({ type:"stop" })); }
+
+function sendAutoSync(){ if (ws?.readyState===1)
+  ws.send(JSON.stringify({ type:"set_autosync", on: $("autoSync").checked })); }
+
+// host pushes progress as it auto-syncs + builds the report after uploads land
+function handleAuto(m) {
+  const el = $("autoState");
+  if (m.state === "running") {
+    el.style.color = "#e2b340";
+    el.textContent = `auto-processing ${m.session_id} — time sync + report…`;
+  } else if (m.state === "done") {
+    const w = m.worst_residual_ms;
+    const ok = m.verdict !== "off by > one frame";
+    el.style.color = (w==null) ? "#8b95a1" : (ok ? "#5ad17a" : "#ef6b6b");
+    el.textContent = (w==null)
+      ? `auto-done ${m.session_id} — synced (need ≥2 cams for residual). Report ready.`
+      : `auto-done ${m.session_id} — residual ${w.toFixed(0)} ms (${m.verdict}; frame ${m.frame_ms} ms). Report ready.`;
+    loadSessions();
+  } else if (m.state === "error") {
+    el.style.color = "#ef6b6b";
+    el.textContent = `auto-process failed for ${m.session_id}: ${m.error||""}`;
+  }
+}
+
+function banner(txt, on){ const b=$("banner"); b.textContent=txt; b.style.display = on?"block":"none"; }
+function countdownTo(serverMs, label){
+  const tick = () => {
+    const left = serverMs - Date.now() - serverOffsetGuess;  // approx; control clock ~ server
+    if (left <= 0) { banner(label+" NOW", true); setTimeout(()=>banner("",false), 700); return; }
+    banner(label+" in " + (left/1000).toFixed(1) + "s", true); requestAnimationFrame(tick);
+  };
+  tick();
+}
+let serverOffsetGuess = 0;
+
+function connect() {
+  ws = new WebSocket((location.protocol==="https:"?"wss":"ws")+"://"+location.host+"/ws");
+  ws.onopen = () => { $("wsState").textContent = "connected";
+    ws.send(JSON.stringify({ type:"register", role:"control" })); sendAutoSync(); };
+  ws.onclose = () => { $("wsState").textContent = "disconnected — retrying"; setTimeout(connect,1500); };
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "hello") serverOffsetGuess = m.server_ms - Date.now();
+    else if (m.type === "preview") renderPreview(m);
+    else if (m.type === "auto_status") handleAuto(m);
+    else if (m.type === "roster") renderRoster(m.cameras);
+    else if (m.type === "started") { started=true; $("btnStart").disabled=true; $("btnStop").disabled=false;
+      countdownTo(m.t0_server_ms, "RECORD"); setTimeout(()=>countdownTo(m.clap_at_server_ms,"CLAP"),
+        m.t0_server_ms - Date.now() - serverOffsetGuess + 200); }
+    else if (m.type === "stopped") { started=false; $("btnStart").disabled=false; $("btnStop").disabled=true;
+      banner("",false);
+      // give uploads a few seconds to land, then refresh the recordings list
+      loadSessions(); setTimeout(loadSessions, 4000); setTimeout(loadSessions, 12000); }
+  };
+}
+$("autoSync").onchange = sendAutoSync;
+loadHost(); loadPairing(); connect(); loadSessions();
+</script>
+</body>
+</html>

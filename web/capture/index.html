@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Capture — camera time sync</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, system-ui, sans-serif; background:#0b0d10; color:#e7eaee; }
+  #video { width:100vw; height:auto; background:#000; display:block; }
+  .bar { padding:10px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+         position:sticky; top:0; background:#11151a; border-bottom:1px solid #222; }
+  .pill { font-size:12px; padding:3px 8px; border-radius:999px; background:#1b2129; border:1px solid #2a313b; }
+  .ok { color:#5ad17a; } .warn { color:#e2b340; } .err { color:#ef6b6b; }
+  input { background:#1b2129; color:#e7eaee; border:1px solid #2a313b; border-radius:6px; padding:6px 8px; }
+  #clap { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+          background:#fff; color:#000; font-size:18vw; font-weight:800; z-index:50; }
+  .log { font:12px/1.4 ui-monospace, monospace; padding:8px 14px; color:#9aa4af; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="pill">Label <input id="label" size="8"></span>
+  <span class="pill" id="wsState">ws: …</span>
+  <span class="pill" id="clockState">clock: …</span>
+  <span class="pill" id="recState">idle</span>
+</div>
+<video id="video" playsinline muted autoplay></video>
+<div id="clap">CLAP</div>
+<div class="log" id="log"></div>
+
+<script>
+const qs = new URLSearchParams(location.search);
+const labelInput = document.getElementById("label");
+labelInput.value = qs.get("label") || ("cam-" + Math.random().toString(36).slice(2,6));
+const log = (...a) => { const el=document.getElementById("log");
+  el.textContent = (a.join(" ") + "\n" + el.textContent).slice(0, 4000); };
+const setPill = (id, txt, cls) => { const e=document.getElementById(id);
+  e.textContent = txt; e.className = "pill" + (cls? " "+cls : ""); };
+
+let ws, deviceId = null;
+let clock = { offset: 0, rtt: Infinity, samples: [] };  // offset: server = local + offset
+let stream, recorder, chunks = [], frames = [], sessionId = null;
+let recording = false;
+
+// ---- clock sync: server_ms = Date.now() + offset --------------------------
+function startClockSync() {
+  setInterval(() => {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: "clock_ping", t0: Date.now() }));
+  }, 1000);
+}
+function onPong(m) {
+  const t3 = Date.now();
+  const rtt = (t3 - m.t0) - (m.t2 - m.t1);
+  const offset = ((m.t1 - m.t0) + (m.t2 - t3)) / 2;  // server - local
+  clock.samples.push({ rtt, offset });
+  if (clock.samples.length > 20) clock.samples.shift();
+  // keep the estimate from the minimum-RTT sample (least queuing noise)
+  const best = clock.samples.reduce((a,b)=> b.rtt < a.rtt ? b : a);
+  clock.offset = best.offset; clock.rtt = best.rtt;
+  const offs = clock.samples.map(s=>s.offset);
+  const mean = offs.reduce((a,b)=>a+b,0)/offs.length;
+  const jitter = Math.sqrt(offs.reduce((a,b)=>a+(b-mean)**2,0)/offs.length);
+  setPill("clockState", `clock ±${jitter.toFixed(1)}ms rtt ${clock.rtt.toFixed(0)}`,
+          jitter < 15 ? "ok" : "warn");
+  ws.send(JSON.stringify({ type:"clock_report", offset_ms: clock.offset,
+                           rtt_ms: clock.rtt, jitter_ms: jitter }));
+}
+
+// ---- camera ---------------------------------------------------------------
+async function startCamera(cfg = {}) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const video = {
+    facingMode: cfg.facing || "environment",
+    width:  { ideal: cfg.width  || 1920 },
+    height: { ideal: cfg.height || 1080 },
+    frameRate: { ideal: cfg.fps || 60 },
+  };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video });  // audio = clap channel
+    const v = document.getElementById("video");
+    v.srcObject = stream; await v.play();
+    const s = stream.getVideoTracks()[0].getSettings();
+    log(`camera ${s.width}x${s.height}@${s.frameRate||"?"}fps`);
+    logFrames(v);
+  } catch (e) {
+    setPill("recState", "camera blocked", "err");
+    log("getUserMedia error:", e.name, e.message,
+        location.protocol === "http:" ? "(needs HTTPS on iOS)" : "");
+  }
+}
+// per-frame display timestamps mapped to server clock
+function logFrames(v) {
+  if (!("requestVideoFrameCallback" in HTMLVideoElement.prototype)) {
+    log("requestVideoFrameCallback unsupported — no per-frame log"); return;
+  }
+  const cb = (now, meta) => {
+    if (recording) frames.push({
+      server_ms: Date.now() + clock.offset,
+      mediaTime: meta.mediaTime,
+      expectedDisplayTime: meta.expectedDisplayTime,
+      presentedFrames: meta.presentedFrames,
+      w: meta.width, h: meta.height,
+    });
+    v.requestVideoFrameCallback(cb);
+  };
+  v.requestVideoFrameCallback(cb);
+}
+
+async function keepAwake() {
+  try { if ("wakeLock" in navigator) { await navigator.wakeLock.request("screen");
+    log("wake lock acquired"); } } catch(e){ log("wake lock failed:", e.message); }
+}
+
+// ---- recording ------------------------------------------------------------
+function scheduleStart(m) {
+  sessionId = m.session_id; frames = []; chunks = [];
+  const startLocal = m.t0_server_ms - clock.offset;   // local = server - offset
+  const clapLocal  = m.clap_at_server_ms - clock.offset;
+  const dStart = Math.max(0, startLocal - Date.now());
+  setPill("recState", `arming in ${(dStart/1000).toFixed(1)}s`, "warn");
+  setTimeout(beginRecording, dStart);
+  setTimeout(showClap, Math.max(0, clapLocal - Date.now()));
+}
+function beginRecording() {
+  if (!stream) { log("no stream"); return; }
+  let mime = "video/mp4";
+  if (!MediaRecorder.isTypeSupported(mime)) mime = "";  // let Safari pick
+  recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.onstop = uploadAll;
+  recorder.start(1000);  // 1s timeslice
+  recording = true;
+  setPill("recState", "● recording", "err");
+  ws.send(JSON.stringify({ type:"status", status:"recording" }));
+  log("recording started, server_ms≈", (Date.now()+clock.offset).toFixed(0));
+}
+function showClap() {
+  if (!recording) return;
+  const el = document.getElementById("clap"); el.style.display = "flex";
+  setTimeout(()=> el.style.display = "none", 400);
+}
+function stopRecording() {
+  if (recorder && recording) { recording = false; recorder.stop();
+    setPill("recState", "uploading…", "warn");
+    ws.send(JSON.stringify({ type:"status", status:"uploading" })); }
+}
+
+// ---- chunked upload to host ----------------------------------------------
+async function putFile(filename, blob) {
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  const CH = 4 * 1024 * 1024; let offset = 0;
+  const sha = await crypto.subtle.digest("SHA-256", buf);
+  const shaHex = [...new Uint8Array(sha)].map(b=>b.toString(16).padStart(2,"0")).join("");
+  while (offset < buf.length || (offset === 0 && buf.length === 0)) {
+    const end = Math.min(offset + CH, buf.length);
+    const final = end >= buf.length;
+    const res = await fetch("/upload", { method:"POST", body: buf.slice(offset, end),
+      headers: { "X-Session": sessionId, "X-Device": labelInput.value,
+                 "X-Filename": filename, "X-Offset": String(offset),
+                 "X-Final": final ? "1":"0", ...(final ? {"X-SHA256": shaHex} : {}) }});
+    const j = await res.json(); offset = end;
+    if (final) { log(`uploaded ${filename}`, j.verified ? "(verified)" : "(hash MISMATCH)"); break; }
+  }
+}
+async function uploadAll() {
+  const blob = new Blob(chunks, { type: chunks[0]?.type || "video/mp4" });
+  const ext = (blob.type.includes("mp4")) ? "mp4" : "webm";
+  await putFile(`video.${ext}`, blob);
+  await putFile("frames.json", new Blob([JSON.stringify(frames)], {type:"application/json"}));
+  await putFile("clock.json", new Blob([JSON.stringify(clock)], {type:"application/json"}));
+  setPill("recState", "done ✓", "ok");
+  ws.send(JSON.stringify({ type:"status", status:"uploaded" }));
+}
+
+// ---- low-rate preview (monitoring only; kept light so it never starves MediaRecorder) ----
+let previewTimer = null, previewCanvas = document.createElement("canvas");
+function startPreview() {
+  if (previewTimer) return;
+  const v = document.getElementById("video"), W = 320;
+  previewTimer = setInterval(() => {
+    if (!v.videoWidth || !ws || ws.readyState !== 1) return;
+    const scale = W / v.videoWidth;
+    previewCanvas.width = W; previewCanvas.height = Math.round(v.videoHeight * scale);
+    previewCanvas.getContext("2d").drawImage(v, 0, 0, previewCanvas.width, previewCanvas.height);
+    ws.send(JSON.stringify({ type: "preview", data: previewCanvas.toDataURL("image/jpeg", 0.5) }));
+  }, 300);  // ~3 fps
+}
+function stopPreview() { if (previewTimer) { clearInterval(previewTimer); previewTimer = null; } }
+
+// ---- websocket ------------------------------------------------------------
+function connect() {
+  ws = new WebSocket((location.protocol==="https:"?"wss":"ws")+"://"+location.host+"/ws");
+  ws.onopen = () => { setPill("wsState","ws: connected","ok");
+    ws.send(JSON.stringify({ type:"register", role:"camera",
+      label: labelInput.value, info:{ ua: navigator.userAgent } }));
+    startClockSync(); };
+  ws.onclose = () => { setPill("wsState","ws: closed","err"); setTimeout(connect, 1500); };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "registered") { deviceId = m.device_id; log("registered", deviceId); }
+    else if (m.type === "clock_pong") onPong(m);
+    else if (m.type === "config") { log("config", JSON.stringify(m.config)); startCamera(m.config); }
+    else if (m.type === "start") scheduleStart(m);
+    else if (m.type === "stop") stopRecording();
+    else if (m.type === "preview_on") startPreview();
+    else if (m.type === "preview_off") stopPreview();
+  };
+}
+labelInput.onchange = () => { if (ws?.readyState===1)
+  ws.send(JSON.stringify({ type:"register", role:"camera", label: labelInput.value, info:{} })); };
+
+keepAwake(); startCamera(); connect();
+</script>
+</body>
+</html>

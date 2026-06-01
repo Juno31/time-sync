@@ -1,0 +1,8 @@
+# Live host app (app.py) — minimal: one async web lib + pure-python QR
+aiohttp>=3.9
+segno>=1.6
+
+# Offline post-hoc sync / calibration (sync.py) — only needed when aligning
+numpy>=1.24
+scipy>=1.10
+opencv-python>=4.8
