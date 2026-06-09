@@ -64,6 +64,16 @@ def ffprobe_meta(video: Path):
     return dur, fps
 
 
+def count_frames(video: Path):
+    """Exact number of video frames in a file (None if unreadable)."""
+    r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+             "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(video)])
+    try:
+        return int(r.stdout.strip())
+    except Exception:
+        return None
+
+
 def extract_envelope(video: Path, workdir: Path):
     """Extract mono audio, return (envelope @ ENV_RATE, ok)."""
     wav = workdir / (video.stem + ".wav")
@@ -139,8 +149,19 @@ def discover_cameras(session: Path):
 
 def render_aligned(video, start_s, dur, fps, out_path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    r = run(["ffmpeg", "-y", "-ss", f"{max(0.0, start_s):.4f}", "-i", str(video),
-             "-t", f"{dur:.4f}", "-vf", f"fps={fps}", "-r", str(fps),
+    # -ss MUST come AFTER -i. Before -i it is a fast *input* seek that snaps to the nearest
+    # keyframe, shifting the trim (and thus the clap) by up to ~one frame and injecting a
+    # constant residual (the "always ~22 ms" bug). After -i it is an accurate decode-then-
+    # discard seek, so the clap lands exactly where the offset says (residual -> ~0 ms) and
+    # both clips get identical length/frame counts. See docs/error_log.md 2026-06-09.
+    # Force an exact, identical frame count on every clip: n = round(dur*fps). dur and fps are
+    # common to all cameras, so all aligned clips get the SAME number of CFR frames (frame i of
+    # cam A is the same instant as frame i of cam B). -frames:v conforms VFR tail unevenness that
+    # -t alone leaves (one clip ending a few frames short). See docs/error_log.md 2026-06-09.
+    n_frames = max(1, int(round(dur * fps)))
+    r = run(["ffmpeg", "-y", "-i", str(video),
+             "-ss", f"{max(0.0, start_s):.4f}",
+             "-vf", f"fps={fps}", "-r", str(fps), "-frames:v", str(n_frames),
              "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
              "-c:a", "aac", str(out_path)])
     return out_path.exists()
@@ -236,6 +257,29 @@ def main():
             ok = render_aligned(info[label]["video"], starts[label], dur, args.fps,
                                 adir / f"{label}.mp4")
             print(f"  rendered {label}.mp4" if ok else f"  FAILED render {label}")
+
+        # Conform every clip to the SAME frame count. VFR tails can leave one clip a few frames
+        # short; trim all to the common minimum by stream-copy (no re-encode, no quality loss),
+        # so frame i lines up across cameras for the full clip length.
+        counts = {l: count_frames(adir / f"{l}.mp4") for l in offsets}
+        valid = {l: n for l, n in counts.items() if n}
+        if valid:
+            m = min(valid.values())
+            for label, n in valid.items():
+                if n > m:
+                    dst = adir / f"{label}.mp4"
+                    tmp = adir / f"{label}.conform.mp4"
+                    r = run(["ffmpeg", "-y", "-i", str(dst),
+                             "-frames:v", str(m), "-c", "copy", str(tmp)])
+                    if getattr(r, "returncode", 1) == 0 and tmp.exists():
+                        try:
+                            tmp.replace(dst)             # atomic on the real host
+                        except OSError:
+                            try:
+                                shutil.copyfile(tmp, dst)   # restricted-FS fallback
+                            finally:
+                                tmp.unlink(missing_ok=True)
+            print(f"  conformed all clips to {m} frames")
 
         if args.verify and len(cams) > 1:
             # residual: re-extract aligned audio and re-measure lag vs reference

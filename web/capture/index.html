@@ -25,6 +25,7 @@
   <span class="pill">Label <input id="label" size="8"></span>
   <span class="pill" id="wsState">ws: …</span>
   <span class="pill" id="clockState">clock: …</span>
+  <span class="pill" id="camState">cam: …</span>
   <span class="pill" id="recState">idle</span>
 </div>
 <video id="video" playsinline muted autoplay></video>
@@ -44,6 +45,11 @@ let ws, deviceId = null;
 let clock = { offset: 0, rtt: Infinity, samples: [] };  // offset: server = local + offset
 let stream, recorder, chunks = [], frames = [], sessionId = null;
 let recording = false;
+let camSettings = null;   // negotiated {width,height,fps,requested_fps,ok}; reported to host
+function sendCamSettings() {
+  if (camSettings && ws && ws.readyState === 1)
+    ws.send(JSON.stringify({ type: "cam_settings", settings: camSettings }));
+}
 
 // ---- clock sync: server_ms = Date.now() + offset --------------------------
 function startClockSync() {
@@ -51,6 +57,17 @@ function startClockSync() {
     if (!ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify({ type: "clock_ping", t0: Date.now() }));
   }, 1000);
+}
+// fresh offset estimate on demand: clear history, fire a fast burst of pings
+function resyncClock() {
+  clock.samples = [];
+  setPill("clockState", "clock: re-syncing…", "warn");
+  let n = 0;
+  const burst = setInterval(() => {
+    if (!ws || ws.readyState !== 1) { clearInterval(burst); return; }
+    ws.send(JSON.stringify({ type: "clock_ping", t0: Date.now() }));
+    if (++n >= 12) clearInterval(burst);
+  }, 150);
 }
 function onPong(m) {
   const t3 = Date.now();
@@ -73,18 +90,31 @@ function onPong(m) {
 // ---- camera ---------------------------------------------------------------
 async function startCamera(cfg = {}) {
   if (stream) stream.getTracks().forEach(t => t.stop());
+  const wantFps = cfg.fps || 60;
   const video = {
     facingMode: cfg.facing || "environment",
-    width:  { ideal: cfg.width  || 1920 },
-    height: { ideal: cfg.height || 1080 },
-    frameRate: { ideal: cfg.fps || 60 },
+    width:  { ideal: cfg.width  || 1280 },
+    height: { ideal: cfg.height || 720 },
+    // min biases iOS toward a high-fps capture format; ideal asks for the target.
+    // NOTE: iOS only exposes a 60 fps format at <=720p — at 1080p it caps to 30 (WebKit bug 179994).
+    frameRate: { min: Math.min(30, wantFps), ideal: wantFps },
   };
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true, video });  // audio = clap channel
     const v = document.getElementById("video");
     v.srcObject = stream; await v.play();
     const s = stream.getVideoTracks()[0].getSettings();
-    log(`camera ${s.width}x${s.height}@${s.frameRate||"?"}fps`);
+    const gotFps = Math.round(s.frameRate || 0);
+    log(`camera ${s.width}x${s.height}@${s.frameRate||"?"}fps (asked ${cfg.width||1280}x${cfg.height||720}@${wantFps})`);
+    // visible verdict: green only if we actually got the requested rate
+    setPill("camState", `cam ${s.width}x${s.height}@${gotFps}`,
+            gotFps >= wantFps - 2 ? "ok" : "warn");
+    // report negotiated settings to host so the control UI can show actual fps
+    camSettings = { width: s.width, height: s.height, fps: gotFps,
+                    requested_fps: wantFps, ok: gotFps >= wantFps - 2 };
+    sendCamSettings();
+    if (gotFps < wantFps - 2)
+      log(`fps capped at ${gotFps} (requested ${wantFps}). iOS caps to 30 at 1080p — use 1280x720 for 60.`);
     logFrames(v);
   } catch (e) {
     setPill("recState", "camera blocked", "err");
@@ -110,10 +140,33 @@ function logFrames(v) {
   v.requestVideoFrameCallback(cb);
 }
 
+let wakeSentinel = null, wakeWarned = false;
 async function keepAwake() {
-  try { if ("wakeLock" in navigator) { await navigator.wakeLock.request("screen");
-    log("wake lock acquired"); } } catch(e){ log("wake lock failed:", e.message); }
+  if (!("wakeLock" in navigator)) { log("wake lock unsupported on this browser"); return; }
+  if (wakeSentinel) return;                 // already held
+  if (document.visibilityState !== "visible") return;  // can only acquire while visible
+  try {
+    wakeSentinel = await navigator.wakeLock.request("screen");
+    wakeSentinel.addEventListener("release", () => { wakeSentinel = null; });
+    log("wake lock acquired");
+  } catch (e) {
+    wakeSentinel = null;
+    // iOS denies Screen Wake Lock entirely in Low Power Mode -> NotAllowedError "Permission was denied"
+    if (e.name === "NotAllowedError" && !wakeWarned) {
+      wakeWarned = true;
+      log("wake lock failed: " + e.message +
+          " — turn OFF Low Power Mode (Settings > Battery), then tap the screen.");
+    } else {
+      log("wake lock failed:", e.name, e.message);
+    }
+  }
 }
+// re-acquire after the page is backgrounded/foregrounded (iOS auto-releases on hide)
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") keepAwake();
+});
+// first user gesture is the most reliable moment to obtain the lock on iOS
+window.addEventListener("pointerdown", () => keepAwake(), { once: false });
 
 // ---- recording ------------------------------------------------------------
 function scheduleStart(m) {
@@ -197,7 +250,7 @@ function connect() {
   ws.onopen = () => { setPill("wsState","ws: connected","ok");
     ws.send(JSON.stringify({ type:"register", role:"camera",
       label: labelInput.value, info:{ ua: navigator.userAgent } }));
-    startClockSync(); };
+    startClockSync(); sendCamSettings(); };
   ws.onclose = () => { setPill("wsState","ws: closed","err"); setTimeout(connect, 1500); };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
@@ -208,6 +261,7 @@ function connect() {
     else if (m.type === "stop") stopRecording();
     else if (m.type === "preview_on") startPreview();
     else if (m.type === "preview_off") stopPreview();
+    else if (m.type === "clock_resync") resyncClock();
   };
 }
 labelInput.onchange = () => { if (ws?.readyState===1)

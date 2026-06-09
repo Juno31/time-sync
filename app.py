@@ -102,6 +102,10 @@ class Hub:
         self.autosync = True   # auto-run sync + report when all uploads land
         self.participants = set()  # device_ids that recorded the current session
         self.processed = set()     # session_ids already auto-processed (fire once)
+        # Capture config auto-applied to every camera on connect. Default = the only
+        # iOS combination that yields 60 fps (60 fps format exists only at <=720p;
+        # 1080p caps to 30 — WebKit bug 179994). Overwritten by any pushed "config".
+        self.last_config = {"width": 1280, "height": 720, "fps": 60, "facing": "environment"}
 
     # ---- roster broadcast -------------------------------------------------
     def roster(self):
@@ -112,6 +116,7 @@ class Hub:
                 "status": c["status"],
                 "clock": c["clock"],
                 "info": c["info"],
+                "settings": c.get("settings"),
             }
             for d, c in self.cameras.items()
         ]
@@ -527,9 +532,13 @@ async def ws_handler(request):
                         "info": m.get("info", {}),
                         "clock": {"offset_ms": None, "rtt_ms": None, "jitter_ms": None},
                         "status": "connected",
+                        "settings": None,   # negotiated {width,height,fps,...} reported by the phone
                     }
                     await ws.send_json({"type": "registered", "device_id": device_id,
                                         "server_ms": now_ms()})
+                    # Auto-apply the current capture config so every phone configures
+                    # itself on connect (no manual "Push config" needed).
+                    await ws.send_json({"type": "config", "config": hub.last_config})
                     # If a control client is already watching, tell this camera to
                     # start previewing immediately (the set_preview broadcast only
                     # fires when the *first* control joins, which is usually before
@@ -557,6 +566,11 @@ async def ws_handler(request):
                     "type": "preview", "device_id": device_id,
                     "label": hub.cameras[device_id]["label"], "data": m.get("data")})
 
+            # ---- negotiated camera settings (actual W/H/fps) ----------------
+            elif t == "cam_settings" and device_id in hub.cameras:
+                hub.cameras[device_id]["settings"] = m.get("settings")
+                await hub.push_roster()
+
             # ---- camera status updates --------------------------------------
             elif t == "status" and device_id in hub.cameras:
                 st = m.get("status", "connected")
@@ -568,8 +582,11 @@ async def ws_handler(request):
                     await hub.maybe_autosync()        # fire when all participants are done
 
             # ---- control commands -------------------------------------------
-            elif t == "config":   # push capture config to all cameras
-                await hub.broadcast_cameras({"type": "config", "config": m.get("config", {})})
+            elif t == "config":   # push capture config to all cameras + remember it for new joiners
+                hub.last_config = m.get("config", {}) or hub.last_config
+                await hub.broadcast_cameras({"type": "config", "config": hub.last_config})
+            elif t == "clock_resync":   # control asks all phones to re-estimate clock offset now
+                await hub.broadcast_cameras({"type": "clock_resync"})
             elif t == "set_autosync":
                 hub.autosync = bool(m.get("on", True))
             elif t == "start":
@@ -598,6 +615,25 @@ async def ws_handler(request):
     return ws
 
 
+async def delete_session(request):
+    """Delete a recorded session and all its files. POST /session_delete?session=<id>."""
+    sid = request.query.get("session", "")
+    d = _safe_session_dir(sid)
+    if d is None:
+        return web.json_response({"ok": False, "error": "session not found"},
+                                 status=404, headers=NO_CACHE)
+    import shutil as _sh
+    try:
+        _sh.rmtree(d)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500, headers=NO_CACHE)
+    # forget any in-memory state tied to this session
+    if hub.session and hub.session.get("session_id") == d.name:
+        hub.session = None
+    hub.processed.discard(d.name)
+    return web.json_response({"ok": True, "session_id": d.name}, headers=NO_CACHE)
+
+
 def build_app(tls: bool, lan: str, port: int, token: str) -> web.Application:
     app = web.Application(client_max_size=512 * 1024 * 1024)  # 512 MB chunk ceiling
     app["tls"] = tls
@@ -615,6 +651,7 @@ def build_app(tls: bool, lan: str, port: int, token: str) -> web.Application:
     app.router.add_get("/host", host_status)
     app.router.add_get("/report", report)
     app.router.add_post("/sync", run_sync)
+    app.router.add_post("/session_delete", delete_session)
     app.router.add_post("/upload", upload)
     app.router.add_get("/ws", ws_handler)
     app.router.add_static("/static/", WEB)  # serve shared assets if any

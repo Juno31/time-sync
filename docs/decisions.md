@@ -38,6 +38,50 @@ Records *why* choices were made, so future sessions don't relitigate them.
 - **How to apply:** keep dependencies to aiohttp (+ opencv/numpy/scipy for sync only). Resist adding frameworks,
   databases, or a JS build step. mkcert is the one unavoidable extra (iOS secure-context).
 
+## 2026-06-09 — Capture fps default 1280×720@60 + auto-config on connect; wake-lock hardening
+
+**Symptom (user):** real sessions captured ~30 fps despite the config requesting 60
+(`pilot_joonho_1`, `test_tom_1`: 33.0 ms median frame interval = true 30 fps).
+
+**Cause:** the request was 1920×1080. iOS Safari exposes a 60 fps camera *format* only at
+≤720p; at 1080p the back camera's only format is 30 fps, so the `frameRate:{ideal:60}` hint is
+silently dropped. Long-standing WebKit limitation — bug 179994 ("can not control framerate &
+resolution using getUserMedia"). `frameRate.ideal` is advisory per W3C mediacapture (MDN).
+
+**Decisions:**
+- Default capture config is now **1280×720 @60**, the only iOS combination that yields 60 fps.
+  Set in three places: capture `startCamera()` defaults, control-UI inputs, and `Hub.last_config`.
+- Capture constraint changed `frameRate:{ideal}` → `frameRate:{min:min(30,fps), ideal:fps}` to bias
+  iOS toward a high-fps format. (Avoided `{exact}` — throws OverconstrainedError and kills the stream.)
+- **Auto-config on connect:** host pushes `Hub.last_config` to each camera immediately after
+  `registered`, so a phone configures itself with no manual "Push config to all". A pushed config
+  updates `Hub.last_config`, so later joiners inherit it. (app.py register handler + config handler.)
+- Capture page now shows a **`cam WxH@fps` pill** (green only if achieved fps ≥ requested−2) so the
+  negotiated rate is visible on the phone — the only ground truth, since iOS varies by device/thermal.
+- Control UI: added a Preset dropdown (720p@60 primary / 1080p@30) + corrected the muted help text.
+
+**Wake lock ("Permission was denied" on iPhone 16 Pro):** root cause is iOS refusing Screen Wake
+Lock in **Low Power Mode** (returns NotAllowedError). Code also requested the lock on page load
+(before any gesture) and never re-acquired after iOS auto-releases it on tab-hide. Fixes: request on
+first `pointerdown` and on `visibilitychange→visible`; on NotAllowedError, log guidance to disable
+Low Power Mode. (Not a code bug we can fully solve — LPM denial is OS policy; surfaced to the user.)
+
+**Validation:** `tests/run_all.sh` → smoke **21/21** (incl. new "camera auto-configured on connect"
+check asserting 1280×720@60) + sync **2/2**. On-device gate (pending real re-record): capture pill
+reads `1280x720@60` and `frames.json` median Δt ≈ 16–17 ms (≈60 fps) instead of 33 ms.
+
+## 2026-06-09 — Sync render must use accurate seek; clips conformed to equal frame count
+
+**Bug:** `sync.py:render_aligned` used `ffmpeg -ss <start> -i` (input seek before `-i`), which snaps
+the trim to the nearest keyframe and shifted the clap by ~one frame — the source of the recurring,
+suspiciously-constant ~22 ms residual (identical at 30 and 60 fps). Verified by ffmpeg A/B test:
+input-seek → −21 ms residual; accurate seek (`-ss` after `-i`) → 0.0 ms. **Decision:** always place
+`-ss` after `-i` for frame-accurate trimming, accepting the slightly slower decode (clips are short).
+Also force equal frame counts (`-frames:v round(dur*fps)` + post-render stream-copy conform to the
+common minimum), so frame *i* is the same instant across cameras for downstream triangulation.
+See docs/error_log.md 2026-06-09 for the full diagnostic. Validated: residual 0.0 ms on real
+test_Joonho_1, both clips 561 frames; smoke 26/26 + sync 2/2.
+
 ## Open items for user confirmation
 - Approve this plan before coding begins (Step 0).
 - Confirm: do you have an Apple-ID-based way to keep Safari foreground/awake during multi-minute trials,

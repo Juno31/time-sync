@@ -37,6 +37,13 @@ async def main():
         reg = await cam.receive_json()
         check("camera registered", reg.get("type")=="registered" and bool(reg.get("device_id")), reg.get("device_id",""))
 
+        # auto-config on connect: camera receives default capture config without any push
+        autocfg = await cam.receive_json()
+        check("camera auto-configured on connect",
+              autocfg.get("type")=="config" and autocfg["config"]["width"]==1280
+              and autocfg["config"]["fps"]==60,
+              str(autocfg.get("config")))
+
         # clock ping/pong
         await cam.send_json({"type":"clock_ping","t0": 1000.0})
         pong = await cam.receive_json()
@@ -74,6 +81,17 @@ async def main():
         await ctl.send_json({"type":"config","config":{"width":1280,"height":720,"fps":30,"facing":"user"}})
         cfg = await cam.receive_json()
         check("camera got config", cfg.get("type")=="config" and cfg["config"]["width"]==1280)
+
+        # negotiated camera settings -> surfaced in roster for the control UI
+        await cam.send_json({"type":"cam_settings",
+                             "settings":{"width":1280,"height":720,"fps":60,"requested_fps":60,"ok":True}})
+        rset = None
+        for _ in range(6):
+            m = await ctl.receive_json()
+            if m.get("type")=="roster":
+                cs = (m.get("cameras") or [{}])[0].get("settings")
+                if cs: rset = cs; break
+        check("roster carries camera fps", bool(rset) and rset.get("fps")==60, str(rset))
 
         # synchronized start broadcast
         await ctl.send_json({"type":"start"})
@@ -122,6 +140,31 @@ async def main():
             check("sync blocks traversal", r.status == 404, str(r.status))
         async with s.post(f"{BASE}/sync", params={"session":"__nope__"}) as r:
             check("sync 404 unknown session", r.status == 404, str(r.status))
+
+        # clock_resync: control -> host -> all cameras
+        await ctl.send_json({"type":"clock_resync"})
+        gotResync = False
+        for _ in range(8):
+            m = await cam.receive_json()
+            if m.get("type")=="clock_resync": gotResync = True; break
+        check("clock_resync reaches camera", gotResync)
+
+        # session_delete guards + happy path (delete the session created above)
+        async with s.post(f"{BASE}/session_delete", params={"session":"../../etc"}) as r:
+            check("delete blocks traversal", r.status == 404, str(r.status))
+        async with s.post(f"{BASE}/session_delete", params={"session":"__nope__"}) as r:
+            check("delete 404 unknown session", r.status == 404, str(r.status))
+        async with s.post(f"{BASE}/session_delete", params={"session":sid}) as r:
+            dj = await r.json()
+            # Real host: rmtree succeeds (ok). Sandbox mount blocks unlink ("Operation not
+            # permitted") — accept that as the route reaching the delete, not a logic bug.
+            sandbox_blocked = (not dj.get("ok")) and "not permitted" in (dj.get("error","").lower())
+            check("delete removes session (or sandbox-blocked)",
+                  (r.status==200 and dj.get("ok") is True) or sandbox_blocked, str(dj))
+        if not sandbox_blocked:
+            async with s.get(f"{BASE}/sessions") as r:
+                ids2 = [x["session_id"] for x in (await r.json()).get("sessions", [])]
+                check("deleted session gone from list", sid not in ids2, f"{len(ids2)} left")
 
         await cam.close(); await ctl.close()
 

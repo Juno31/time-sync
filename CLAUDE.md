@@ -55,14 +55,18 @@ upload clips to the host PC, and synchronize them in post for pose estimation / 
       frames.json monotonic, clap present, effective fps reported.
 - [x] Step 8 on REAL FOOTAGE (2026-06-01): synchronized trigger ~8 ms; post-alignment residual −22 ms
       (≈0.66 frame @30fps, within one frame). Audio x-corr robust to a multi-clap take; see error_log.
-- [x] Per-recording report (NEW): session_report.py -> sessions/<id>/report.html (sync verdict vs frame
-      period + clap-detection diagnostic as inline SVG). Served in-UI via GET /report; listed in the control
-      UI "Recordings & sync reports" panel. Smoke now 18/18 (adds /sessions + /report checks).
-- [x] Minimal-terminal (user req 2026-06-01): app auto-creates/refreshes the mkcert cert when the LAN IP
-      changes (no setup_certs.sh re-run); start.command is double-clickable; control UI header shows host
-      status (HTTPS + LAN IP); reports built/viewed entirely in the browser.
+- [x] Per-recording report: session_report.py -> sessions/<id>/report.html (sync verdict vs frame period,
+      clap-detection diagnostic as inline SVG, audio-vs-timestamp cross-check). Served via GET /report.
+- [x] Minimal-terminal (2026-06-01): app auto-creates/refreshes the mkcert cert on LAN IP change;
+      start.command double-clickable; control UI header shows host status (HTTPS + LAN IP); run.sh kills any
+      stale instance on the port and self-heals missing deps (numpy/scipy/cv2) on launch.
+- [x] 2026-06-02 batch: auto sync+report when all cameras finish uploading (toggle in UI); per-session
+      Sync/Report buttons + POST /sync; /media static route + synchronized side-by-side video player in the
+      report with a playback cursor on the clap waveform; target fps now read from session config (not fixed 30);
+      session folders named title_subject_trial; "Sync residual" column in the recordings panel. Smoke 20/20.
+- [x] Repo prepared for GitHub (README, LICENSE MIT, setup.sh/ps1, hardened .gitignore). Remote:
+      https://github.com/Juno31/time-sync.git (user pushes; sandbox cannot push — no creds, mount blocks git).
 - [ ] Calibration on real footage (Step 7b): needs a printed checkerboard (user deferred). reproj error TBD.
-- [ ] Optional: keypoint-velocity refinement in sync.py; "calibration capture mode" button in the app UI
 
 ## Pending tasks (resume next session)
 
@@ -85,3 +89,42 @@ on real footage (needs a checkerboard) and optional refinements.
 **Next steps:**
 - [ ] Wire a 2D pose backend (RTMPose/MediaPipe) into `sync.py` for OpenCap keypoint-velocity cross-correlation as a secondary refinement.
 - [ ] Add a "calibration capture mode" button to the control UI (records short intrinsics + extrinsics clips per camera into the session).
+
+## Possible upgrades (backlog) — recorded 2026-06-02
+
+Prioritized ideas surfaced during development. Each notes **why** and **how/where**. None are started.
+
+### Accuracy / methodology
+- [ ] **True windowed Pearson cross-correlation** in `sync.py:xcorr_lag`. Now: normalized cross-correlation
+      (NCC) on globally standardized envelopes; the "confidence" ≈ Pearson r only at full overlap (it divides by
+      global L2 norms, not the per-lag overlap-window norms). Upgrade: re-center/re-scale within each lag's
+      overlap window (or via FFT running sums) so confidence is a rigorous r at every lag. Sharper peak selection.
+- [ ] **Sub-frame alignment.** Render currently resamples to CFR at the target fps, so residual is quantized to
+      the frame grid (≈½-frame floor). Keep fractional offsets / render at a higher common fps, or phase-shift,
+      to push residual below one frame even at 60 fps.
+- [ ] **Independent ground-truth residual.** Clap-only residual is partly self-confirming (measured on the same
+      signal used to align). Add an optional on-screen ms-timer / LED visual event option and measure residual on
+      that. This is also the PLAN Step 8 validation rig. See docs/sync_design.md "Validation".
+- [ ] **Keypoint-velocity refinement (OpenCap Layer B).** Documented plug-in point in sync.py; not implemented.
+      RTMPose/MediaPipe → Butterworth low-pass → cross-correlate summed vertical keypoint speed for sub-frame.
+
+### Robustness / UX
+- [ ] **Multi-clap auto-warning.** Detect ambiguous claps (ratio of primary vs secondary xcorr peak, or
+      argmax-vs-xcorr disagreement > 1 frame) and flag it in the report/UI so the user re-records a clean clap.
+- [ ] **Auto-sync edge case.** If a participant camera disconnects before reporting `uploaded`, maybe_autosync
+      never fires (it waits for all participants). Add a timeout / "finalize now" button / detect upload completion
+      server-side from the final chunk rather than only the WS status message.
+- [ ] **Host version indicator.** We repeatedly hit confusion where a stale host process served old code. Add a
+      build/version string to GET /health and have the control UI warn if the running host predates the page.
+- [ ] **frames.json fidelity.** rVFC logs *display* callbacks, not encoded capture frames, so eff_fps is a proxy
+      and can read absurdly high (e.g. 233). Consider deriving true capture fps differently, or label it clearly.
+
+### Calibration / 3D (needs hardware)
+- [ ] **Step 7b on real footage** + in-UI "calibration capture mode" button (records intrinsics+extrinsics clips,
+      runs calibrate.py server-side, shows reproj error). Target < ~1 px. Then hand off to opencap-core/Pose2Sim.
+
+### Docs / packaging
+- [ ] **Refresh docs/app_documentation.html** — it predates /sync, /media, the auto-process flow, configured-fps,
+      and the residual column. Update the routes table and the report description.
+- [ ] **Cross-platform host parity** (Windows/Linux launcher equivalents of start.command/run.sh).
+- [ ] Decide whether to keep CLAUDE.md / docs/error_log.md in the public repo (internal-flavored notes).

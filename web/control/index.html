@@ -21,6 +21,7 @@
   .start { background:#2f6df6; color:#fff; } .stop { background:#7a2230; color:#fff; }
   .ghost { background:#1b2129; color:#e7eaee; border:1px solid #2a313b; }
   .mini { padding:5px 11px; font-size:12px; }
+  .danger { margin-left:6px; } .danger:hover { border-color:#ef6b6b; color:#ef6b6b; }
   a.rep { display:inline-block; padding:5px 11px; font-size:12px; background:#1b2129;
     border:1px solid #2a313b; border-radius:8px; color:#e7eaee; text-decoration:none; margin-left:6px; }
   a.rep:hover { border-color:#3a8bff; }
@@ -31,8 +32,9 @@
   th { color:#8b95a1; font-weight:600; }
   .dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px; }
   .g{background:#5ad17a;} .y{background:#e2b340;} .r{background:#ef6b6b;}
-  #qr { background:#fff; padding:8px; border-radius:10px; width:fit-content; }
-  #qr svg { display:block; width:200px; height:200px; }
+  #qr { background:#fff; padding:10px; border-radius:10px; width:100%; max-width:240px;
+        aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; }
+  #qr svg { display:block; width:100%; height:100%; }
   .muted { color:#8b95a1; font-size:12px; }
   #banner { font-size:28px; font-weight:800; text-align:center; padding:14px;
     border-radius:10px; background:#161b22; margin-bottom:12px; display:none; }
@@ -62,9 +64,15 @@
     </div>
     <div class="card" style="margin-top:18px;">
       <h2>Capture config</h2>
-      <div class="row">
-        <div><label>Width</label><input id="cfgW" type="number" value="1920"></div>
-        <div><label>Height</label><input id="cfgH" type="number" value="1080"></div>
+      <div><label>Preset</label>
+        <select id="cfgPreset" onchange="applyPreset()">
+          <option value="1280x720@60">1280×720 @60 (iOS allows 60 only here)</option>
+          <option value="1920x1080@30">1920×1080 @30 (1080p caps to 30 on iOS)</option>
+          <option value="custom">custom…</option>
+        </select></div>
+      <div class="row" style="margin-top:8px;">
+        <div><label>Width</label><input id="cfgW" type="number" value="1280"></div>
+        <div><label>Height</label><input id="cfgH" type="number" value="720"></div>
       </div>
       <div class="row">
         <div><label>fps (requested)</label><input id="cfgFps" type="number" value="60"></div>
@@ -73,7 +81,8 @@
           <option value="user">front</option></select></div>
       </div>
       <button class="ghost" style="margin-top:12px;width:100%" onclick="pushConfig()">Push config to all</button>
-      <p class="muted">iOS treats fps as a hint; streams are VFR and resampled in post.</p>
+      <p class="muted">iOS exposes a 60 fps camera format only at ≤720p; at 1080p it caps to 30 (WebKit bug 179994).
+        fps is a hint and output is VFR — resampled in post. Each phone's pill shows the fps it actually got.</p>
     </div>
   </div>
 
@@ -82,9 +91,10 @@
 
     <!-- 1. Cameras & live preview (merged) -->
     <div class="card">
-      <h2>Cameras &amp; live preview <span class="muted" style="text-transform:none;font-weight:400;">(~3 fps monitor)</span></h2>
-      <table><thead><tr><th>Label</th><th>Status</th><th>Clock offset</th><th>RTT</th><th>Jitter</th></tr></thead>
-      <tbody id="roster"><tr><td colspan="5" class="muted">no cameras connected</td></tr></tbody></table>
+      <h2>Cameras &amp; live preview <span class="muted" style="text-transform:none;font-weight:400;">(~3 fps monitor)</span>
+        <button class="ghost mini" style="float:right;margin-top:-2px" onclick="resyncClocks(this)">Re-sync clocks</button></h2>
+      <table><thead><tr><th>Label</th><th>Status</th><th>Resolution</th><th>Sampling rate</th><th>Clock offset</th><th>RTT</th><th>Jitter</th></tr></thead>
+      <tbody id="roster"><tr><td colspan="7" class="muted">no cameras connected</td></tr></tbody></table>
       <div class="grid" id="previews" style="margin-top:14px;"><p class="muted" id="previewEmpty">no streams yet</p></div>
     </div>
 
@@ -114,7 +124,7 @@
         <input type="checkbox" id="autoSync" checked style="width:auto;"> Auto-sync &amp; build report after upload
       </label>
       <div class="syncmsg" id="autoState"></div>
-      <table><thead><tr><th>Session</th><th>Cams</th><th>Sync residual</th><th>Report</th></tr></thead>
+      <table><thead><tr><th>Session</th><th>Cams</th><th>Sync residual</th><th>Actions</th></tr></thead>
       <tbody id="sessionsBody"><tr><td colspan="4" class="muted">loading…</td></tr></tbody></table>
       <p class="muted">When every camera that recorded a session finishes uploading, the host runs the
         time sync and builds the report automatically. Toggle off to do it manually with the buttons below.</p>
@@ -144,14 +154,20 @@ async function loadPairing() {
 function renderRoster(cameras) {
   lastRoster = cameras;
   const tb = $("roster");
-  if (!cameras.length) { tb.innerHTML = '<tr><td colspan="5" class="muted">no cameras connected</td></tr>'; return; }
+  if (!cameras.length) { tb.innerHTML = '<tr><td colspan="7" class="muted">no cameras connected</td></tr>'; return; }
   tb.innerHTML = cameras.map(c => {
     const cl = c.clock || {};
     const j = cl.jitter_ms;
     const dot = j==null ? "y" : (j<15 ? "g" : (j<40 ? "y":"r"));
-    const f = (v,u)=> v==null ? "—" : v.toFixed(u===0?0:1)+(u===0?"":"")+(u? "":"");
+    const st = c.settings;
+    const resCell = !st ? '<span class="muted">—</span>' : `${st.width}×${st.height}`;
+    const fpsCell = !st ? '<span class="muted">—</span>'
+      : `<span style="color:${st.ok?'#5ad17a':'#e2b340'};font-weight:600">${st.fps} fps</span>`
+        + (st.ok ? '' : ` <span class="muted">(asked ${st.requested_fps})</span>`);
     return `<tr><td>${c.label}</td>
       <td><span class="dot ${c.status==='recording'?'r':c.status==='uploaded'?'g':'y'}"></span>${c.status}</td>
+      <td>${resCell}</td>
+      <td>${fpsCell}</td>
       <td>${cl.offset_ms==null?"—":cl.offset_ms.toFixed(1)+" ms"}</td>
       <td>${cl.rtt_ms==null?"—":cl.rtt_ms.toFixed(0)+" ms"}</td>
       <td><span class="dot ${dot}"></span>${cl.jitter_ms==null?"—":cl.jitter_ms.toFixed(1)+" ms"}</td></tr>`;
@@ -205,15 +221,17 @@ async function loadSessions() {
       const id = s.session_id, idJs = id.replace(/'/g, "\\'");
       const name = s.title ? `${s.title}` : id;
       const sub = s.title ? `<div class="muted">${id}</div>` : "";
+      const delBtn = `<button class="ghost mini danger" onclick="deleteSession('${idJs}', this)">Delete</button>`;
       let action;
       if (s.n_cameras >= 1) {
         const syncLabel = s.has_sync ? "Re-sync" : "Sync";
         action =
           `<button class="ghost mini" onclick="syncSession('${idJs}', this)">${syncLabel}</button>` +
           `<a class="rep" href="/report?session=${encodeURIComponent(id)}" target="_blank" rel="noopener">Report</a>` +
+          delBtn +
           `<div class="syncmsg"></div>`;
       } else {
-        action = '<span class="muted">no video</span>';
+        action = '<span class="muted">no video</span> ' + delBtn;
       }
       return `<tr><td>${name}${sub}</td><td>${s.n_cameras}</td>` +
              `<td class="residcell">${residCell(s)}</td><td>${action}</td></tr>`;
@@ -221,6 +239,31 @@ async function loadSessions() {
   } catch (e) {
     tb.innerHTML = '<tr><td colspan="4" class="muted">could not load sessions — ' +
       'is the host running the latest code? (restart it after updating)</td></tr>';
+  }
+}
+
+// Ask every phone to immediately re-estimate its clock offset (burst of pings).
+function resyncClocks(btn) {
+  if (!ws || ws.readyState !== 1) { alert("not connected to host"); return; }
+  ws.send(JSON.stringify({ type: "clock_resync" }));
+  if (btn) { const t = btn.textContent; btn.disabled = true; btn.textContent = "re-syncing…";
+    setTimeout(() => { btn.disabled = false; btn.textContent = t; }, 2500); }
+}
+
+// Delete a recorded session (folder + all clips) after confirmation.
+async function deleteSession(id, btn) {
+  if (!confirm(`Delete session "${id}" and all its recordings? This cannot be undone.`)) return;
+  const row = btn.closest("tr");
+  btn.disabled = true; btn.textContent = "deleting…";
+  try {
+    const r = await fetch("/session_delete?session=" + encodeURIComponent(id),
+                          { method: "POST", cache: "no-store" });
+    const j = await r.json();
+    if (j.ok) { row.remove(); if (!$("sessionsBody").children.length) loadSessions(); }
+    else { btn.disabled = false; btn.textContent = "Delete"; alert("delete failed: " + (j.error || ("HTTP " + r.status))); }
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Delete";
+    alert("delete failed — could not reach the host");
   }
 }
 
@@ -258,6 +301,12 @@ async function syncSession(id, btn) {
   }
 }
 
+function applyPreset() {
+  const v = $("cfgPreset").value;
+  if (v === "custom") return;
+  const m = v.match(/(\d+)x(\d+)@(\d+)/);
+  if (m) { $("cfgW").value = m[1]; $("cfgH").value = m[2]; $("cfgFps").value = m[3]; }
+}
 function config() {
   return { width:+$("cfgW").value, height:+$("cfgH").value,
            fps:+$("cfgFps").value, facing:$("cfgFacing").value };
