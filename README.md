@@ -42,7 +42,8 @@ hardware timestamps, cannot lock frame rate, and stops recording on screen lock.
 | iPhone(s) | the cameras | iOS Safari, on the **same Wi-Fi** as the host |
 
 Host OS: **macOS is the primary target** (the launcher and cert flow are macOS-oriented). The host process
-itself also runs on Linux/Windows; see `setup.ps1` for Windows.
+itself also runs on Linux/Windows. **Windows users: see [README-Windows.md](README-Windows.md)** for
+Windows setup, the `run.ps1` launcher, certificate trust without AirDrop, and firewall notes.
 
 ---
 
@@ -144,8 +145,10 @@ sync.py                offline post-hoc synchronization (clap x-corr + timestamp
 calibrate.py           OpenCap-style camera calibration (checkerboard / reference object)
 session_report.py      per-recording HTML report (sync verdict + clap diagnostic, inline SVG)
 report.py              overall procedure report across all build steps
-run.sh / start.command launcher (venv bootstrap + open UI)
-setup.sh / setup.ps1   environment setup
+run.sh / start.command launcher, macOS/Linux (venv bootstrap + open UI)
+run.ps1                launcher, Windows (PowerShell equivalent of run.sh)
+setup.sh / setup.ps1   environment setup (bash / PowerShell)
+README-Windows.md      Windows host guide (setup, cert trust, firewall)
 requirements.txt       Python dependencies
 web/control/           control UI (browser, on the host)
 web/capture/           phone capture page (iOS Safari)
