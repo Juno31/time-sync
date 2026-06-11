@@ -1,4 +1,4 @@
-# camera time sync
+# Camera Time Sync (📷 xN)
 
 ![Control UI — Devices & Pairing panes (left), live camera viewport (center), capture/take properties (right), and the LIVE/EDIT control deck with record button, timecode and data rate (bottom)](docs/img/ui.png)
 
