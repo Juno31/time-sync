@@ -1,5 +1,7 @@
 # camera time sync
 
+![Control UI — Devices & Pairing panes (left), live camera viewport (center), capture/take properties (right), and the LIVE/EDIT control deck with record button, timecode and data rate (bottom)](docs/img/ui.png)
+
 Local, self-hosted app to record **time-synchronized video across multiple iPhones** from a browser, upload
 the clips to a host computer, and align them in post for 2D pose estimation / 3D reconstruction.
 
