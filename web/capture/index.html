@@ -6,18 +6,26 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Capture — camera time sync</title>
 <style>
-  :root { color-scheme: dark; }
+  /* Motive-style theme tokens — keep in sync with web/control/index.html */
+  :root { color-scheme: dark;
+    --chrome:#1f1f21; --inset:#1a1b1d; --border:#313438;
+    --text:#cfd3d8; --muted:#878d94; --accent:#2bc1d6;
+    --ok:#69d178; --warn:#e2b340; --err:#ef6b6b; --rec:#e23b3b; }
   * { box-sizing: border-box; }
-  body { margin:0; font-family: -apple-system, system-ui, sans-serif; background:#0b0d10; color:#e7eaee; }
+  body { margin:0; font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+         background:#0d0d0e; color:var(--text); }
   #video { width:100vw; height:auto; background:#000; display:block; }
-  .bar { padding:10px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;
-         position:sticky; top:0; background:#11151a; border-bottom:1px solid #222; }
-  .pill { font-size:12px; padding:3px 8px; border-radius:999px; background:#1b2129; border:1px solid #2a313b; }
-  .ok { color:#5ad17a; } .warn { color:#e2b340; } .err { color:#ef6b6b; }
-  input { background:#1b2129; color:#e7eaee; border:1px solid #2a313b; border-radius:6px; padding:6px 8px; }
+  .bar { padding:10px 14px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+         position:sticky; top:0; background:var(--chrome); border-bottom:1px solid var(--border); }
+  .pill { font-size:12px; padding:3px 9px; border-radius:3px; background:var(--inset);
+          border:1px solid var(--border); }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .err { color:var(--err); }
+  .rec { color:var(--rec); }
+  input { background:var(--inset); color:var(--text); border:1px solid var(--border);
+          border-radius:3px; padding:6px 8px; }
   #clap { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
           background:#fff; color:#000; font-size:18vw; font-weight:800; z-index:50; }
-  .log { font:12px/1.4 ui-monospace, monospace; padding:8px 14px; color:#9aa4af; white-space:pre-wrap; }
+  .log { font:12px/1.4 ui-monospace, monospace; padding:8px 14px; color:var(--muted); white-space:pre-wrap; }
 </style>
 </head>
 <body>
@@ -187,7 +195,7 @@ function beginRecording() {
   recorder.onstop = uploadAll;
   recorder.start(1000);  // 1s timeslice
   recording = true;
-  setPill("recState", "● recording", "err");
+  setPill("recState", "● recording", "rec");
   ws.send(JSON.stringify({ type:"status", status:"recording" }));
   log("recording started, server_ms≈", (Date.now()+clock.offset).toFixed(0));
 }
@@ -214,8 +222,11 @@ async function putFile(filename, blob) {
     const res = await fetch("/upload", { method:"POST", body: buf.slice(offset, end),
       headers: { "X-Session": sessionId, "X-Device": labelInput.value,
                  "X-Filename": filename, "X-Offset": String(offset),
+                 "X-Total": String(buf.length),   // lets the control UI show upload % + data rate
                  "X-Final": final ? "1":"0", ...(final ? {"X-SHA256": shaHex} : {}) }});
     const j = await res.json(); offset = end;
+    if (buf.length) setPill("recState",
+      `uploading ${Math.min(100, Math.round(100*offset/buf.length))}%`, "warn");
     if (final) { log(`uploaded ${filename}`, j.verified ? "(verified)" : "(hash MISMATCH)"); break; }
   }
 }

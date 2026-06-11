@@ -66,6 +66,15 @@ upload clips to the host PC, and synchronize them in post for pose estimation / 
       session folders named title_subject_trial; "Sync residual" column in the recordings panel. Smoke 20/20.
 - [x] Repo prepared for GitHub (README, LICENSE MIT, setup.sh/ps1, hardened .gitignore). Remote:
       https://github.com/Juno31/time-sync.git (user pushes; sandbox cannot push — no creds, mount blocks git).
+- [x] 2026-06-11 Motive-style UI: control UI redesigned after OptiTrack Motive 2.x (researched from
+      official docs screenshots) — LIVE/EDIT modes, Devices/Pairing panes left, Cameras viewport with
+      countdown/CLAP overlay, Capture+Take properties right, bottom Control Deck (take name, red record
+      button, timecode, Delay field, data rate, event-log bell) + status bar. New features: host version
+      indicator (/health, /host, hello + UI mismatch warning), configurable start delay (lead_ms,
+      clamped 1–30 s), upload progress broadcast (X-Total header; per-camera % bar + Data KB/s),
+      trial auto-increment, keyboard shortcuts (Space/L/E/R), session event log. Capture page restyled
+      to the same tokens. Fixed pre-existing run_all.sh bug (auto-cert made the test host HTTPS):
+      app.py --no-https. Smoke 27/27, sync 2/2, browser-verified. See decisions.md 2026-06-11.
 - [ ] Calibration on real footage (Step 7b): needs a printed checkerboard (user deferred). reproj error TBD.
 
 ## Pending tasks (resume next session)
@@ -114,8 +123,8 @@ Prioritized ideas surfaced during development. Each notes **why** and **how/wher
 - [ ] **Auto-sync edge case.** If a participant camera disconnects before reporting `uploaded`, maybe_autosync
       never fires (it waits for all participants). Add a timeout / "finalize now" button / detect upload completion
       server-side from the final chunk rather than only the WS status message.
-- [ ] **Host version indicator.** We repeatedly hit confusion where a stale host process served old code. Add a
-      build/version string to GET /health and have the control UI warn if the running host predates the page.
+- [x] **Host version indicator.** ~~We repeatedly hit confusion where a stale host process served old code.~~
+      DONE 2026-06-11: APP_VERSION in /health, /host and WS hello; UI chip warns on mismatch with UI_VERSION.
 - [ ] **frames.json fidelity.** rVFC logs *display* callbacks, not encoded capture frames, so eff_fps is a proxy
       and can read absurdly high (e.g. 233). Consider deriving true capture fps differently, or label it clearly.
 

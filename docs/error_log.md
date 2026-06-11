@@ -89,3 +89,21 @@ Append an entry whenever a step's validation gate fails. Format:
   clip down to the common minimum frame count (atomic replace, restricted-FS copy fallback).
 - Re-run on real session test_Joonho_1 @60 fps: residual cam-zbex 0.0 ms (was −22.0), both clips 561
   frames (were 561 vs 565). Full suite: smoke 26/26 + sync 2/2 (synthetic 300 ms recovered, residual 0.0).
+
+## 2026-06-11 — Pairing QR unscannable after Motive UI redesign (clipped SVG)
+
+- SYMPTOM (user report): iPhone camera does not detect the pairing QR in the new control UI.
+- ROOT CAUSE: `GET /qr` (segno SVG writer, defaults) emits fixed `width="222" height="222"` and **no
+  `viewBox`**. CSS sizes the `<svg>` element to its container, but without a viewBox the path drawing
+  does not scale — it gets **cropped**. The old UI's QR box happened to be ≈ the native 222 px so the
+  latent bug never showed; the redesigned Pairing pane box is 184 px → the right/bottom ~17% of the
+  code was cut off (measured: path overflowed the svg box by 26 px). A QR missing a finder pattern +
+  quiet zone is undetectable.
+- FIX (app.py /qr): save with `omitsize=True` and inject `viewBox="0 0 {w} {h}"` (from
+  `symbol_size(scale, border)`) so the SVG scales to any box. UI: QR enlarged (max-width 260 px,
+  14 px quiet-zone padding) + click-to-enlarge overlay (70vmin white card) for scanning at a distance.
+  Versions bumped to 2026.06.11b (APP_VERSION + UI_VERSION).
+- VALIDATED: in-browser measurement now shows the path fully inside the svg box (viewBox present,
+  margins positive); zoom overlay renders a complete code with all three finder patterns; smoke +
+  sync suites PASS. Lesson: QR rendering must be verified at the *rendered* size, not just visually
+  at one window size.

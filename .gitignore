@@ -19,3 +19,7 @@ report/*.html
 Thumbs.db
 *.log
 *.swp
+
+# Local Claude Code config + macOS AppleDouble files
+.claude/
+._*

@@ -3,145 +3,444 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Control — camera time sync</title>
+<title>camera time sync</title>
 <style>
-  :root { color-scheme: dark; }
+  /* ------------------------------------------------------------------------
+     Motive 2.x–style theme. Tokens sampled from OptiTrack Motive screenshots:
+     dark #1e1e1e chrome, near-black viewport, cyan LIVE/EDIT accent, red record,
+     light-gray-on-dark text, big gray timecode, tiny uppercase pane titles.
+     ------------------------------------------------------------------------ */
+  :root {
+    color-scheme: dark;
+    --bg:       #161617;   /* app background / gaps between panes  */
+    --chrome:   #1f1f21;   /* menubar + control deck               */
+    --panel:    #232427;   /* pane body                            */
+    --panel-hd: #1b1c1e;   /* pane title bar                       */
+    --inset:    #1a1b1d;   /* inputs, wells                        */
+    --viewport: #0d0d0e;   /* 3D/camera viewport                   */
+    --border:   #313438;
+    --border-2: #3c4046;
+    --text:     #cfd3d8;
+    --muted:    #878d94;
+    --accent:   #2bc1d6;   /* Motive cyan (LIVE/EDIT, active)      */
+    --accent-d: #1a7e8c;
+    --rec:      #e23b3b;   /* record red                           */
+    --ok:       #69d178;
+    --warn:     #e2b340;
+    --err:      #ef6b6b;
+    --timecode: #dfe3e7;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:#0b0d10; color:#e7eaee; }
-  header { padding:14px 18px; border-bottom:1px solid #222; display:flex; gap:16px; align-items:center; }
-  h1 { font-size:16px; margin:0; font-weight:650; }
-  main { display:grid; grid-template-columns: 320px 1fr; gap:18px; padding:18px; align-items:start; }
-  .card { background:#11151a; border:1px solid #222; border-radius:12px; padding:16px; }
-  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#8b95a1; margin:0 0 12px; }
-  label { display:block; font-size:12px; color:#9aa4af; margin:10px 0 4px; }
-  input, select, textarea { width:100%; background:#1b2129; color:#e7eaee; border:1px solid #2a313b;
-    border-radius:8px; padding:8px 10px; font-size:14px; }
-  .row { display:flex; gap:10px; } .row > * { flex:1; }
-  button { border:0; border-radius:8px; padding:10px 14px; font-size:14px; font-weight:600; cursor:pointer; }
-  .start { background:#2f6df6; color:#fff; } .stop { background:#7a2230; color:#fff; }
-  .ghost { background:#1b2129; color:#e7eaee; border:1px solid #2a313b; }
-  .mini { padding:5px 11px; font-size:12px; }
-  .danger { margin-left:6px; } .danger:hover { border-color:#ef6b6b; color:#ef6b6b; }
-  a.rep { display:inline-block; padding:5px 11px; font-size:12px; background:#1b2129;
-    border:1px solid #2a313b; border-radius:8px; color:#e7eaee; text-decoration:none; margin-left:6px; }
-  a.rep:hover { border-color:#3a8bff; }
-  .syncmsg { font-size:12px; margin-top:6px; color:#8b95a1; }
-  button:disabled { opacity:.4; cursor:not-allowed; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid #1c2128; }
-  th { color:#8b95a1; font-weight:600; }
-  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px; }
-  .g{background:#5ad17a;} .y{background:#e2b340;} .r{background:#ef6b6b;}
-  #qr { background:#fff; padding:10px; border-radius:10px; width:100%; max-width:240px;
-        aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; }
-  #qr svg { display:block; width:100%; height:100%; }
-  .muted { color:#8b95a1; font-size:12px; }
-  #banner { font-size:28px; font-weight:800; text-align:center; padding:14px;
-    border-radius:10px; background:#161b22; margin-bottom:12px; display:none; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
-  .tile { background:#000; border:1px solid #222; border-radius:10px; overflow:hidden; position:relative; }
-  .tile img { width:100%; display:block; aspect-ratio:4/3; object-fit:cover; background:#000; }
-  .tile .cap { position:absolute; left:8px; bottom:8px; font-size:12px; background:rgba(0,0,0,.55);
-    padding:2px 8px; border-radius:999px; }
-  .tile .stale { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-    color:#8b95a1; font-size:13px; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ---- menu / title bar -------------------------------------------------- */
+  #menubar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
+    background: var(--chrome); border-bottom: 1px solid var(--border);
+    padding: 7px 12px;
+  }
+  #menubar .logo { display: flex; align-items: center; gap: 8px; font-weight: 650;
+    font-size: 13px; letter-spacing: .02em; }
+  #menubar .logo .dot { width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .chip { font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 7px; background: var(--inset); }
+  .chip.ok { color: var(--ok); } .chip.warn { color: var(--warn); } .chip.err { color: var(--err); }
+  #menubar .spacer { flex: 1; }
+
+  /* ---- dock layout ------------------------------------------------------- */
+  #dock {
+    flex: 1 1 auto; display: grid; min-height: 0;
+    grid-template-columns: 290px 1fr 300px; gap: 1px; background: var(--bg);
+    padding: 1px;
+  }
+  .pane { background: var(--panel); border: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0; }
+  .pane + .pane { margin-top: 1px; }
+  .pane-hd {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+    background: var(--panel-hd); border-bottom: 1px solid var(--border);
+    padding: 5px 10px; font-size: 11px; font-weight: 650; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted); user-select: none;
+  }
+  .pane-hd .right { margin-left: auto; display: flex; gap: 6px; align-items: center;
+    text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .pane-bd { flex: 1 1 auto; overflow: auto; padding: 10px; min-height: 0; }
+  #left, #right { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+
+  /* ---- form controls ------------------------------------------------------ */
+  label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 3px; }
+  input, select, textarea {
+    width: 100%; background: var(--inset); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px; padding: 5px 8px;
+    font-size: 12px; font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent-d); }
+  .row { display: flex; gap: 8px; } .row > * { flex: 1; min-width: 0; }
+  button {
+    border: 1px solid var(--border-2); border-radius: 3px; background: #2e3033;
+    color: var(--text); padding: 5px 11px; font-size: 12px; font-weight: 550;
+    cursor: pointer; font-family: inherit;
+  }
+  button:hover { background: #383b3f; border-color: #4a4f56; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.mini { padding: 2px 8px; font-size: 11px; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  .muted { color: var(--muted); font-size: 11px; }
+
+  /* ---- Devices pane -------------------------------------------------------- */
+  .dev { border: 1px solid var(--border); border-radius: 3px; background: var(--inset);
+    padding: 7px 9px; margin-bottom: 7px; }
+  .dev .l1 { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+  .dev .l1 .st { margin-left: auto; font-weight: 400; font-size: 11px; color: var(--muted); }
+  .dev .l2 { margin-top: 3px; font-size: 11px; color: var(--muted); display: flex;
+    flex-wrap: wrap; gap: 4px 10px; }
+  .dev .l2 b { color: var(--text); font-weight: 550; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+  .dot.g { background: var(--ok); } .dot.y { background: var(--warn); }
+  .dot.r { background: var(--rec); box-shadow: 0 0 5px var(--rec); }
+  .upbar { height: 3px; background: #2c2f33; border-radius: 2px; margin-top: 5px; overflow: hidden; }
+  .upbar > div { height: 100%; background: var(--accent); width: 0%; transition: width .3s; }
+
+  /* ---- Pairing pane ---------------------------------------------------------- */
+  /* The QR needs size + quiet zone to scan reliably: fill the pane width, generous
+     white padding, and click-to-enlarge for scanning from a distance. */
+  #qr { background: #fff; padding: 14px; border-radius: 4px; width: 100%; max-width: 260px;
+    margin: 0 auto; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center;
+    cursor: zoom-in; }
+  #qr svg { display: block; width: 100%; height: 100%; }
+  #qrZoom { position: fixed; inset: 0; z-index: 60; display: none; align-items: center;
+    justify-content: center; flex-direction: column; gap: 14px;
+    background: rgba(10,10,11,.92); cursor: zoom-out; }
+  #qrZoom .card { background: #fff; padding: 28px; border-radius: 8px;
+    width: min(70vmin, 560px); aspect-ratio: 1/1; }
+  #qrZoom .card svg { display: block; width: 100%; height: 100%; }
+  #qrZoom .hint { color: var(--muted); font-size: 13px; }
+
+  /* ---- center viewport (LIVE) -------------------------------------------------- */
+  #center { display: flex; flex-direction: column; min-height: 0; }
+  #viewport { position: relative; flex: 1; background: var(--viewport);
+    border: 1px solid var(--border); overflow: auto; }
+  #vpTag { position: absolute; top: 6px; left: 10px; z-index: 3; font-size: 11.5px;
+    color: var(--muted); user-select: none; }
+  #vpTag b { color: var(--text); font-weight: 600; }
+  #previews { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 8px; padding: 30px 10px 34px; }
+  .tile { background: #000; border: 1px solid #27292c; border-radius: 2px;
+    overflow: hidden; position: relative; }
+  .tile img { width: 100%; display: block; aspect-ratio: 4/3; object-fit: cover; background: #000; }
+  .tile .cap { position: absolute; left: 0; top: 0; right: 0; font-size: 10.5px;
+    background: rgba(16,17,18,.78); color: var(--muted); padding: 2px 7px;
+    display: flex; justify-content: space-between; }
+  .tile .cap b { color: var(--text); font-weight: 600; }
+  .tile.rec { border-color: var(--rec); }
+  #vpEmpty { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px;
+    align-items: center; justify-content: center; color: #5a6067; font-size: 12.5px;
+    user-select: none; pointer-events: none; }
+  #vpStatus { position: absolute; right: 10px; bottom: 8px; z-index: 3; font-size: 11.5px;
+    color: var(--muted); text-align: right; user-select: none; }
+  #vpOverlay { position: absolute; inset: 0; z-index: 4; display: none;
+    align-items: center; justify-content: center; flex-direction: column; gap: 6px;
+    pointer-events: none; text-shadow: 0 2px 18px rgba(0,0,0,.85); }
+  #vpOverlay .big { font: 600 56px/1.1 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--timecode); letter-spacing: .04em; }
+  #vpOverlay .sub { font-size: 13px; color: var(--muted); letter-spacing: .25em;
+    text-transform: uppercase; }
+  #vpOverlay.clap .big { color: #fff; font-size: 96px; }
+
+  /* ---- center Data pane (EDIT) -------------------------------------------------- */
+  #dataPane { display: none; flex-direction: column; flex: 1; min-height: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 9px; border-bottom: 1px solid #2a2c30; }
+  th { color: var(--accent); font-weight: 600; font-size: 11px; letter-spacing: .03em;
+    position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  tr:hover td { background: #27292d; }
+  td .sub { color: var(--muted); font-size: 10.5px; }
+  .syncmsg { font-size: 11px; margin-top: 3px; color: var(--muted); }
+  a.rep { display: inline-block; padding: 2px 8px; font-size: 11px; background: #2e3033;
+    border: 1px solid var(--border-2); border-radius: 3px; color: var(--text);
+    text-decoration: none; }
+  a.rep:hover { border-color: var(--accent-d); }
+  .actions { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  .check { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text); }
+  .check input { width: auto; }
+
+  /* ---- control deck ---------------------------------------------------------------- */
+  #deck {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
+    background: var(--chrome); border-top: 1px solid var(--border-2);
+    padding: 8px 14px; min-height: 54px;
+  }
+  #modeSwitch { display: flex; border: 1px solid var(--accent-d); border-radius: 3px;
+    overflow: hidden; flex: 0 0 auto; }
+  #modeSwitch button { border: 0; border-radius: 0; background: transparent;
+    color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .08em;
+    padding: 5px 14px; }
+  #modeSwitch button.active { background: var(--accent); color: #0c2326; }
+  .deck-label { font-size: 11.5px; color: var(--muted); flex: 0 0 auto; }
+  #takeName { font-size: 12.5px; color: var(--text); background: var(--inset);
+    border: 1px solid var(--border); border-radius: 3px; padding: 5px 10px;
+    min-width: 180px; max-width: 330px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  #btnRecord {
+    width: 38px; height: 38px; border-radius: 50%; border: 2px solid #5b5e63;
+    background: radial-gradient(circle at 50% 42%, #ff5252, var(--rec) 65%);
+    flex: 0 0 auto; padding: 0; position: relative;
+  }
+  #btnRecord:hover { border-color: #8a8e94; background: radial-gradient(circle at 50% 42%, #ff6b6b, #e84848 65%); }
+  #btnRecord.armed { animation: blink 1s infinite; }
+  #btnRecord.recording::after { content: ""; position: absolute; inset: 11px;
+    background: #fff; border-radius: 2px; }
+  #btnRecord.recording { background: #6b1f1f; animation: none; }
+  @keyframes blink { 50% { filter: brightness(.55); } }
+  #timecode { font: 500 26px/1 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--timecode); letter-spacing: .03em; min-width: 178px; text-align: center; }
+  #timecode.idle { color: #5a6067; }
+  #timecode.armed { color: var(--warn); }
+  #timecode.rec { color: var(--timecode); }
+  #delayWrap { display: flex; align-items: center; gap: 6px; }
+  #delay { width: 52px; text-align: right; }
+  #deck .spacer { flex: 1; }
+  #dataRate { font-size: 11.5px; color: var(--muted); min-width: 110px; text-align: right; }
+  #dataRate b { color: var(--text); font-weight: 600; }
+  #bell { position: relative; }
+  #bell .badge { position: absolute; top: -6px; right: -6px; background: var(--accent);
+    color: #0c2326; font-size: 9.5px; font-weight: 700; border-radius: 8px;
+    padding: 0 4px; min-width: 14px; text-align: center; display: none; }
+
+  /* ---- status bar + event log -------------------------------------------------------- */
+  #statusbar { flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
+    background: var(--panel-hd); border-top: 1px solid var(--border);
+    padding: 3px 12px; font-size: 11px; color: var(--muted); }
+  #statusbar .spacer { flex: 1; }
+  #eventlog { display: none; flex: 0 0 auto; max-height: 150px; overflow: auto;
+    background: var(--inset); border-top: 1px solid var(--border); padding: 6px 12px;
+    font: 11px/1.6 ui-monospace, Menlo, monospace; color: var(--muted);
+    white-space: pre-wrap; }
+  #eventlog .t { color: #5a6067; }
+  #eventlog .ok { color: var(--ok); } #eventlog .warn { color: var(--warn); }
+  #eventlog .err { color: var(--err); }
+
+  kbd { background: var(--inset); border: 1px solid var(--border-2); border-radius: 3px;
+    padding: 0 4px; font-size: 10px; font-family: inherit; color: var(--muted); }
 </style>
 </head>
 <body>
-<header>
-  <h1>camera time sync</h1>
-  <span class="muted" id="wsState">connecting…</span>
-  <span class="muted" id="hostState"></span>
-  <span class="muted" id="serverState"></span>
+
+<!-- ======== menu / title bar ======== -->
+<header id="menubar">
+  <span class="logo"><span class="dot"></span>camera time sync</span>
+  <span class="chip" id="verChip">v—</span>
+  <span class="spacer"></span>
+  <span class="chip" id="hostState">host: …</span>
+  <span class="chip" id="wsState">connecting…</span>
 </header>
-<main>
-  <div>
-    <div class="card">
-      <h2>Pair a phone</h2>
-      <div id="qr"></div>
-      <p class="muted" id="captureUrl" style="word-break:break-all;"></p>
-      <p class="muted">Open this on each iPhone (Safari). HTTPS + trusted cert required for camera.</p>
+
+<!-- ======== dock: left / center / right ======== -->
+<div id="dock">
+
+  <!-- left: Devices + Pairing -->
+  <aside id="left">
+    <div class="pane" style="flex:1 1 55%;">
+      <div class="pane-hd">Devices
+        <span class="right"><button class="mini" onclick="resyncClocks(this)" title="Ask every phone to re-estimate its clock offset (R)">Re-sync clocks</button></span>
+      </div>
+      <div class="pane-bd" id="devices"><p class="muted">No cameras connected — pair a phone below.</p></div>
     </div>
-    <div class="card" style="margin-top:18px;">
-      <h2>Capture config</h2>
-      <div><label>Preset</label>
+    <div class="pane" style="flex:1 1 45%;">
+      <div class="pane-hd">Pairing</div>
+      <div class="pane-bd">
+        <div id="qr" onclick="qrZoom(true)" title="Click to enlarge"></div>
+        <p class="muted" style="text-align:center; margin:6px 0 0;">click the QR to enlarge</p>
+        <p class="muted" id="captureUrl" style="word-break:break-all; margin:8px 0 4px;"></p>
+        <p class="muted" style="margin:0;">Open on each iPhone in Safari (same Wi-Fi). HTTPS + trusted mkcert cert required for the camera.</p>
+      </div>
+    </div>
+  </aside>
+
+  <!-- center: viewport (LIVE) / data pane (EDIT) -->
+  <section id="center">
+    <div id="viewport">
+      <div id="vpTag"><b>Cameras</b> · live preview (~3 fps monitor)</div>
+      <div id="previews"></div>
+      <div id="vpEmpty">
+        <div>No camera streams</div>
+        <div class="muted">Scan the pairing QR with each iPhone to connect.</div>
+      </div>
+      <div id="vpStatus">0 cameras · 0 recording</div>
+      <div id="vpOverlay"><div class="big"></div><div class="sub"></div></div>
+    </div>
+
+    <div class="pane" id="dataPane">
+      <div class="pane-hd">Data — recordings &amp; sync reports
+        <span class="right">
+          <label class="check" style="margin:0;"><input type="checkbox" id="autoSync" checked>
+            auto-sync + report after upload</label>
+          <button class="mini" onclick="loadSessions()">Refresh</button>
+        </span>
+      </div>
+      <div class="pane-bd" style="padding:0;">
+        <div class="syncmsg" id="autoState" style="padding:6px 10px 0;"></div>
+        <table>
+          <thead><tr><th>Take</th><th>Cams</th><th>Sync residual</th><th style="width:34%">Actions</th></tr></thead>
+          <tbody id="sessionsBody"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+        </table>
+        <p class="muted" style="padding:8px 10px;">When every camera that recorded a take finishes uploading,
+          the host runs the time sync and builds the report automatically (toggle above).</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- right: Properties -->
+  <aside id="right">
+    <div class="pane" style="flex:0 0 auto;">
+      <div class="pane-hd">Capture properties</div>
+      <div class="pane-bd">
+        <label>Preset</label>
         <select id="cfgPreset" onchange="applyPreset()">
           <option value="1280x720@60">1280×720 @60 (iOS allows 60 only here)</option>
           <option value="1920x1080@30">1920×1080 @30 (1080p caps to 30 on iOS)</option>
           <option value="custom">custom…</option>
-        </select></div>
-      <div class="row" style="margin-top:8px;">
-        <div><label>Width</label><input id="cfgW" type="number" value="1280"></div>
-        <div><label>Height</label><input id="cfgH" type="number" value="720"></div>
+        </select>
+        <div class="row">
+          <div><label>Width</label><input id="cfgW" type="number" value="1280"></div>
+          <div><label>Height</label><input id="cfgH" type="number" value="720"></div>
+        </div>
+        <div class="row">
+          <div><label>fps (requested)</label><input id="cfgFps" type="number" value="60"></div>
+          <div><label>Camera</label>
+            <select id="cfgFacing"><option value="environment">back</option><option value="user">front</option></select>
+          </div>
+        </div>
+        <button style="margin-top:10px; width:100%;" onclick="pushConfig()">Push config to all</button>
+        <p class="muted" style="margin-bottom:0;">iOS exposes 60 fps only at ≤720p; 1080p caps to 30
+          (WebKit bug 179994). fps is a hint — output is VFR, resampled in post. Each device shows the fps it actually got.</p>
       </div>
-      <div class="row">
-        <div><label>fps (requested)</label><input id="cfgFps" type="number" value="60"></div>
-        <div><label>Camera</label>
-          <select id="cfgFacing"><option value="environment">back</option>
-          <option value="user">front</option></select></div>
-      </div>
-      <button class="ghost" style="margin-top:12px;width:100%" onclick="pushConfig()">Push config to all</button>
-      <p class="muted">iOS exposes a 60 fps camera format only at ≤720p; at 1080p it caps to 30 (WebKit bug 179994).
-        fps is a hint and output is VFR — resampled in post. Each phone's pill shows the fps it actually got.</p>
     </div>
+    <div class="pane" style="flex:1 1 auto;">
+      <div class="pane-hd">Take properties</div>
+      <div class="pane-bd">
+        <label>Title</label><input id="mTitle" placeholder="e.g. gait_pilot" oninput="updateTakeName()">
+        <div class="row">
+          <div><label>Subject ID</label><input id="mSubject" oninput="updateTakeName()"></div>
+          <div><label>Trial</label><input id="mTrial" oninput="updateTakeName()"></div>
+        </div>
+        <label>Tags (comma-separated)</label><input id="mTags">
+        <label>Notes</label><textarea id="mNotes" rows="3"></textarea>
+        <p class="muted">Folder name = <span id="takePreview" style="color:var(--text)">timestamp</span>.
+          Trial auto-increments after each take.</p>
+        <p class="muted" style="margin-bottom:0;">Shortcuts: <kbd>Space</kbd> record/stop ·
+          <kbd>L</kbd>/<kbd>E</kbd> Live/Edit · <kbd>R</kbd> re-sync clocks</p>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ======== QR zoom overlay ======== -->
+<div id="qrZoom" onclick="qrZoom(false)">
+  <div class="card"></div>
+  <div class="hint">Scan with the iPhone camera · click anywhere to close</div>
+</div>
+
+<!-- ======== control deck ======== -->
+<div id="deck">
+  <div id="modeSwitch">
+    <button id="modeLive" class="active" onclick="setMode('live')">LIVE</button>
+    <button id="modeEdit" onclick="setMode('edit')">EDIT</button>
   </div>
-
-  <div>
-    <div id="banner"></div>
-
-    <!-- 1. Cameras & live preview (merged) -->
-    <div class="card">
-      <h2>Cameras &amp; live preview <span class="muted" style="text-transform:none;font-weight:400;">(~3 fps monitor)</span>
-        <button class="ghost mini" style="float:right;margin-top:-2px" onclick="resyncClocks(this)">Re-sync clocks</button></h2>
-      <table><thead><tr><th>Label</th><th>Status</th><th>Resolution</th><th>Sampling rate</th><th>Clock offset</th><th>RTT</th><th>Jitter</th></tr></thead>
-      <tbody id="roster"><tr><td colspan="7" class="muted">no cameras connected</td></tr></tbody></table>
-      <div class="grid" id="previews" style="margin-top:14px;"><p class="muted" id="previewEmpty">no streams yet</p></div>
-    </div>
-
-    <!-- 2. Session -->
-    <div class="card" style="margin-top:18px;">
-      <h2>Session</h2>
-      <label>Title</label><input id="mTitle" placeholder="e.g. gait_pilot_01">
-      <div class="row">
-        <div><label>Subject ID</label><input id="mSubject"></div>
-        <div><label>Trial</label><input id="mTrial"></div>
-      </div>
-      <label>Tags (comma-separated)</label><input id="mTags">
-      <label>Notes</label><textarea id="mNotes" rows="2"></textarea>
-      <div class="row" style="margin-top:14px;">
-        <button class="start" id="btnStart" onclick="startRec()">● Start (synchronized)</button>
-        <button class="stop"  id="btnStop"  onclick="stopRec()" disabled>■ Stop</button>
-      </div>
-      <p class="muted" id="sessionState"></p>
-    </div>
-
-    <!-- 3. Recordings & sync reports -->
-    <div class="card" style="margin-top:18px;">
-      <h2>Recordings & sync reports
-        <button class="ghost" style="float:right;margin-top:-4px;padding:4px 10px;font-size:12px"
-          onclick="loadSessions()">Refresh</button></h2>
-      <label style="display:flex;align-items:center;gap:8px;margin:0 0 10px;color:#cfd6de;font-size:13px;">
-        <input type="checkbox" id="autoSync" checked style="width:auto;"> Auto-sync &amp; build report after upload
-      </label>
-      <div class="syncmsg" id="autoState"></div>
-      <table><thead><tr><th>Session</th><th>Cams</th><th>Sync residual</th><th>Actions</th></tr></thead>
-      <tbody id="sessionsBody"><tr><td colspan="4" class="muted">loading…</td></tr></tbody></table>
-      <p class="muted">When every camera that recorded a session finishes uploading, the host runs the
-        time sync and builds the report automatically. Toggle off to do it manually with the buttons below.</p>
-    </div>
+  <span class="deck-label">Take Name:</span>
+  <span id="takeName">timestamp</span>
+  <button id="btnRecord" onclick="toggleRecord()" title="Start / stop synchronized recording (Space)"></button>
+  <span id="timecode" class="idle">00:00:00.000</span>
+  <div id="delayWrap" title="Lead time before all phones start recording (synchronized trigger)">
+    <span class="deck-label">Delay</span>
+    <input id="delay" type="number" min="1" max="30" step="0.5" value="3">
+    <span class="deck-label">s</span>
   </div>
-</main>
+  <span class="spacer"></span>
+  <span id="dataRate">Data <b>0.0 KB/s</b></span>
+  <button id="bell" class="mini" onclick="toggleLog()" title="Event log">🔔<span class="badge" id="bellBadge">0</span></button>
+</div>
+
+<!-- ======== event log + status bar ======== -->
+<div id="eventlog"></div>
+<div id="statusbar">
+  <span id="sbLeft">ready</span>
+  <span class="spacer"></span>
+  <span id="sbRight"></span>
+</div>
 
 <script>
-let ws, lastRoster = [], started = false;
+/* The UI version must match APP_VERSION in app.py — used to detect a stale host
+   process serving old code (or an old cached page against a new host). */
+const UI_VERSION = "2026.06.11b";
+
+let ws, lastRoster = [], started = false, armed = false;
+let serverOffsetGuess = 0;
+let mode = "live";
 const $ = id => document.getElementById(id);
 
+/* ---- event log ------------------------------------------------------------ */
+let unseenEvents = 0;
+function logEvent(msg, cls) {
+  const el = $("eventlog");
+  const t = new Date().toLocaleTimeString();
+  const line = document.createElement("div");
+  line.innerHTML = `<span class="t">${t}</span> ` + (cls ? `<span class="${cls}">${msg}</span>` : msg);
+  el.prepend(line);
+  while (el.children.length > 300) el.lastChild.remove();
+  if (el.style.display !== "block") {
+    unseenEvents++; $("bellBadge").textContent = unseenEvents;
+    $("bellBadge").style.display = "inline-block";
+  }
+  $("sbLeft").textContent = msg.replace(/<[^>]*>/g, "");
+}
+function toggleLog() {
+  const el = $("eventlog");
+  const show = el.style.display !== "block";
+  el.style.display = show ? "block" : "none";
+  if (show) { unseenEvents = 0; $("bellBadge").style.display = "none"; }
+}
+
+/* ---- LIVE / EDIT mode ------------------------------------------------------ */
+function setMode(m) {
+  mode = m;
+  $("modeLive").classList.toggle("active", m === "live");
+  $("modeEdit").classList.toggle("active", m === "edit");
+  $("viewport").style.display = m === "live" ? "block" : "none";
+  $("dataPane").style.display = m === "edit" ? "flex" : "none";
+  $("btnRecord").disabled = (m === "edit");
+  if (m === "edit") loadSessions();
+}
+
+/* ---- host / version -------------------------------------------------------- */
+function checkVersion(hostVer) {
+  const chip = $("verChip");
+  if (!hostVer) {
+    chip.textContent = "host: old code";
+    chip.className = "chip err";
+    logEvent("host is running OLD code (no version reported) — restart it after updating", "err");
+  } else if (hostVer !== UI_VERSION) {
+    chip.textContent = `host v${hostVer} ≠ ui v${UI_VERSION}`;
+    chip.className = "chip warn";
+    logEvent(`version mismatch — host v${hostVer}, page v${UI_VERSION}. Hard-reload the page or restart the host.`, "warn");
+  } else {
+    chip.textContent = "v" + hostVer;
+    chip.className = "chip";
+  }
+}
 async function loadHost() {
   try {
     const h = await (await fetch("/host")).json();
-    const secure = h.https ? "🔒 HTTPS" : "⚠ HTTP (iOS camera needs HTTPS)";
-    $("hostState").textContent = `· ${secure} · ${h.lan_ip}:${h.port}`;
-    $("hostState").style.color = h.https ? "#5ad17a" : "#e2b340";
+    const secure = h.https ? "🔒 HTTPS" : "⚠ HTTP — iOS camera needs HTTPS";
+    $("hostState").textContent = `${secure} · ${h.lan_ip}:${h.port}`;
+    $("hostState").className = "chip " + (h.https ? "ok" : "warn");
+    checkVersion(h.version);
   } catch (e) {}
 }
 
@@ -150,65 +449,199 @@ async function loadPairing() {
   $("captureUrl").textContent = p.capture_url;
   $("qr").innerHTML = await (await fetch("/qr?data=" + encodeURIComponent(p.capture_url))).text();
 }
-
-function renderRoster(cameras) {
-  lastRoster = cameras;
-  const tb = $("roster");
-  if (!cameras.length) { tb.innerHTML = '<tr><td colspan="7" class="muted">no cameras connected</td></tr>'; return; }
-  tb.innerHTML = cameras.map(c => {
-    const cl = c.clock || {};
-    const j = cl.jitter_ms;
-    const dot = j==null ? "y" : (j<15 ? "g" : (j<40 ? "y":"r"));
-    const st = c.settings;
-    const resCell = !st ? '<span class="muted">—</span>' : `${st.width}×${st.height}`;
-    const fpsCell = !st ? '<span class="muted">—</span>'
-      : `<span style="color:${st.ok?'#5ad17a':'#e2b340'};font-weight:600">${st.fps} fps</span>`
-        + (st.ok ? '' : ` <span class="muted">(asked ${st.requested_fps})</span>`);
-    return `<tr><td>${c.label}</td>
-      <td><span class="dot ${c.status==='recording'?'r':c.status==='uploaded'?'g':'y'}"></span>${c.status}</td>
-      <td>${resCell}</td>
-      <td>${fpsCell}</td>
-      <td>${cl.offset_ms==null?"—":cl.offset_ms.toFixed(1)+" ms"}</td>
-      <td>${cl.rtt_ms==null?"—":cl.rtt_ms.toFixed(0)+" ms"}</td>
-      <td><span class="dot ${dot}"></span>${cl.jitter_ms==null?"—":cl.jitter_ms.toFixed(1)+" ms"}</td></tr>`;
-  }).join("");
+function qrZoom(on) {
+  const z = $("qrZoom");
+  if (on) z.querySelector(".card").innerHTML = $("qr").innerHTML;
+  z.style.display = on ? "flex" : "none";
 }
 
-const previewTiles = {};   // device_id -> {img, ts}
+/* ---- Devices pane ------------------------------------------------------------ */
+const uploads = {};   // device label -> {size,total,final,ts}
+let prevStatus = {};  // device_id -> status (for event log diffs)
+function renderRoster(cameras) {
+  lastRoster = cameras;
+  // event-log status transitions
+  const cur = {};
+  for (const c of cameras) {
+    cur[c.device_id] = c.status;
+    if (!(c.device_id in prevStatus)) logEvent(`${c.label} connected`, "ok");
+    else if (prevStatus[c.device_id] !== c.status) logEvent(`${c.label}: ${c.status}`);
+  }
+  for (const id of Object.keys(prevStatus))
+    if (!(id in cur)) logEvent(`camera disconnected (${id})`, "warn");
+  prevStatus = cur;
+
+  const host = $("devices");
+  if (!cameras.length) {
+    host.innerHTML = '<p class="muted">No cameras connected — pair a phone below.</p>';
+  } else {
+    host.innerHTML = cameras.map(c => {
+      const cl = c.clock || {};
+      const j = cl.jitter_ms;
+      const clockDot = j == null ? "y" : (j < 15 ? "g" : (j < 40 ? "y" : "r"));
+      const stDot = c.status === "recording" ? "r" : (c.status === "uploaded" ? "g" : "y");
+      const st = c.settings;
+      const res = st ? `<b>${st.width}×${st.height}</b>` : "—";
+      const fps = !st ? "—"
+        : `<b style="color:${st.ok ? 'var(--ok)' : 'var(--warn)'}">${st.fps} fps</b>` +
+          (st.ok ? "" : ` <span>(asked ${st.requested_fps})</span>`);
+      const up = uploads[c.label];
+      const pct = up && up.total ? Math.min(100, Math.round(100 * up.size / up.total)) : null;
+      const upHtml = (up && !up.final && pct != null)
+        ? `<div class="upbar"><div style="width:${pct}%"></div></div>
+           <div class="l2"><span>uploading ${up.filename || ""} <b>${pct}%</b></span></div>` : "";
+      return `<div class="dev">
+        <div class="l1"><span class="dot ${stDot}"></span>${c.label}<span class="st">${c.status}</span></div>
+        <div class="l2">
+          <span>${res}</span><span>${fps}</span>
+          <span>Δ ${cl.offset_ms == null ? "—" : cl.offset_ms.toFixed(1) + " ms"}</span>
+          <span>rtt ${cl.rtt_ms == null ? "—" : cl.rtt_ms.toFixed(0)}</span>
+          <span><span class="dot ${clockDot}" style="width:6px;height:6px;"></span> j ${cl.jitter_ms == null ? "—" : cl.jitter_ms.toFixed(1) + " ms"}</span>
+        </div>${upHtml}</div>`;
+    }).join("");
+  }
+  const nRec = cameras.filter(c => c.status === "recording").length;
+  $("vpStatus").textContent = `${cameras.length} camera${cameras.length === 1 ? "" : "s"} · ${nRec} recording`;
+}
+
+/* ---- live preview tiles --------------------------------------------------------- */
+const previewTiles = {};   // device_id -> {tile, img, cap, ts}
 function renderPreview(m) {
-  const empty = $("previewEmpty"); if (empty) empty.remove();
+  $("vpEmpty").style.display = "none";
   let t = previewTiles[m.device_id];
   if (!t) {
     const tile = document.createElement("div"); tile.className = "tile";
     const img = document.createElement("img");
-    const cap = document.createElement("div"); cap.className = "cap"; cap.textContent = m.label;
+    const cap = document.createElement("div"); cap.className = "cap";
     tile.appendChild(img); tile.appendChild(cap);
     $("previews").appendChild(tile);
-    t = previewTiles[m.device_id] = { img, cap, ts: 0 };
+    t = previewTiles[m.device_id] = { tile, img, cap, ts: 0 };
   }
-  t.img.src = m.data; t.cap.textContent = m.label; t.ts = Date.now();
+  const rec = (lastRoster.find(c => c.device_id === m.device_id) || {}).status === "recording";
+  t.tile.classList.toggle("rec", rec);
+  t.img.src = m.data;
+  t.cap.innerHTML = `<b>${m.label}</b><span>${rec ? "● REC" : "live"}</span>`;
+  t.ts = Date.now();
 }
-// drop tiles for cameras that stopped sending (disconnected)
-setInterval(() => {
+setInterval(() => {   // drop tiles for cameras that stopped sending
   const live = new Set(lastRoster.map(c => c.device_id));
   for (const [id, t] of Object.entries(previewTiles)) {
-    if (!live.has(id) || Date.now() - t.ts > 5000) { t.img.closest(".tile").remove(); delete previewTiles[id]; }
+    if (!live.has(id) || Date.now() - t.ts > 5000) { t.tile.remove(); delete previewTiles[id]; }
   }
-  if (!Object.keys(previewTiles).length && !$("previewEmpty")) {
-    const p = document.createElement("p"); p.className = "muted"; p.id = "previewEmpty";
-    p.textContent = "no streams yet"; $("previews").appendChild(p);
-  }
+  $("vpEmpty").style.display = Object.keys(previewTiles).length ? "none" : "flex";
 }, 2000);
 
-// render the residual cell from a session record
+/* ---- take name (folder preview) -------------------------------------------------- */
+const slug = s => (s || "").trim().replace(/ /g, "-").replace(/[^\w-]/g, "");
+function takeName() {
+  const parts = [slug($("mTitle").value), slug($("mSubject").value), slug($("mTrial").value)];
+  return parts.filter(Boolean).join("_");
+}
+function updateTakeName() {
+  const n = takeName() || "timestamp";
+  $("takeName").textContent = n;
+  $("takePreview").textContent = n;
+}
+
+/* ---- recording: deck + timecode --------------------------------------------------- */
+let tcTimer = null, recStartServerMs = null;
+function fmtTc(ms) {
+  ms = Math.max(0, ms);
+  const h = Math.floor(ms / 3.6e6), m = Math.floor(ms % 3.6e6 / 6e4),
+        s = Math.floor(ms % 6e4 / 1000), f = Math.floor(ms % 1000);
+  const p = (n, w) => String(n).padStart(w, "0");
+  return `${p(h,2)}:${p(m,2)}:${p(s,2)}.${p(f,3)}`;
+}
+function setTimecode(cls, text) { const el = $("timecode"); el.className = cls; el.textContent = text; }
+function startTcLoop() {
+  cancelAnimationFrame(tcTimer);
+  const tick = () => {
+    const nowServer = Date.now() + serverOffsetGuess;
+    if (armed && recStartServerMs != null && nowServer < recStartServerMs) {
+      setTimecode("armed", "−" + fmtTc(recStartServerMs - nowServer));
+    } else if (started && recStartServerMs != null) {
+      setTimecode("rec", fmtTc(nowServer - recStartServerMs));
+    } else { setTimecode("idle", "00:00:00.000"); return; }
+    tcTimer = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function overlay(big, sub, clap) {
+  const o = $("vpOverlay");
+  if (!big) { o.style.display = "none"; return; }
+  o.style.display = "flex";
+  o.classList.toggle("clap", !!clap);
+  o.querySelector(".big").textContent = big;
+  o.querySelector(".sub").textContent = sub || "";
+}
+function countdownTo(serverMs, label) {
+  const tick = () => {
+    const left = serverMs - Date.now() - serverOffsetGuess;
+    if (left <= 0) {
+      overlay(label, label === "CLAP" ? "clap once — sharp single impulse" : "", label === "CLAP");
+      setTimeout(() => overlay(null), 800);
+      return;
+    }
+    overlay((left / 1000).toFixed(1), label + " in", label === "CLAP");
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function toggleRecord() { started || armed ? stopRec() : startRec(); }
+
+async function startRec() {
+  if (mode !== "live") return;
+  if (!ws || ws.readyState !== 1) { logEvent("not connected to host", "err"); return; }
+  if (!lastRoster.length) logEvent("starting with 0 cameras connected", "warn");
+  const body = { title: $("mTitle").value, subject: $("mSubject").value, trial: $("mTrial").value,
+    notes: $("mNotes").value, tags: $("mTags").value.split(",").map(s => s.trim()).filter(Boolean),
+    config: config() };
+  const s = await (await fetch("/session", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+  logEvent("session created: " + s.session_id);
+  const leadMs = Math.round((parseFloat($("delay").value) || 3) * 1000);
+  ws.send(JSON.stringify({ type: "start", lead_ms: leadMs }));
+}
+function stopRec() { ws.send(JSON.stringify({ type: "stop" })); }
+
+/* after a finished take, bump a numeric Trial so the next folder never collides */
+function bumpTrial() {
+  const el = $("mTrial"), v = el.value.trim();
+  if (v !== "" && /^\d+$/.test(v)) { el.value = String(parseInt(v, 10) + 1); updateTakeName(); }
+}
+
+/* ---- data rate (from upload_progress broadcasts) ------------------------------------ */
+const rateLog = [];   // [t_ms, bytes]
+function noteBytes(n) { rateLog.push([Date.now(), n]); }
+setInterval(() => {
+  const cutoff = Date.now() - 5000;
+  while (rateLog.length && rateLog[0][0] < cutoff) rateLog.shift();
+  const bytes = rateLog.reduce((a, b) => a + b[1], 0);
+  const kbs = bytes / 5 / 1024;
+  $("dataRate").innerHTML = "Data <b>" +
+    (kbs >= 1024 ? (kbs / 1024).toFixed(1) + " MB/s" : kbs.toFixed(1) + " KB/s") + "</b>";
+}, 1000);
+
+function handleUpload(m) {
+  uploads[m.device] = { size: m.size, total: m.total, final: m.final, filename: m.filename, ts: Date.now() };
+  noteBytes(m.received || 0);
+  if (m.final) logEvent(`${m.device} uploaded ${m.filename}` +
+    (m.verified === true ? " (verified)" : m.verified === false ? " (HASH MISMATCH)" : ""),
+    m.verified === false ? "err" : "ok");
+  renderRoster(lastRoster);
+}
+
+/* ---- Data pane (EDIT): recordings & sync reports -------------------------------------- */
 function residCell(s) {
   if (!s.has_sync) return '<span class="muted">not synced</span>';
   if (s.residual_ms == null) return '<span class="muted">n/a (1 cam)</span>';
   const ok = s.verdict !== "off by > one frame";
-  const col = ok ? "#5ad17a" : "#ef6b6b";
+  const col = ok ? "var(--ok)" : "var(--err)";
   const frame = s.frame_ms != null ? ` <span class="muted">/ ${s.frame_ms} ms frame</span>` : "";
   return `<span style="color:${col};font-weight:600">${s.residual_ms.toFixed(0)} ms</span>${frame}` +
-         `<div class="muted">${s.verdict || ""}</div>`;
+         `<div class="sub">${s.verdict || ""}</div>`;
 }
 
 async function loadSessions() {
@@ -220,18 +653,18 @@ async function loadSessions() {
     tb.innerHTML = ss.map(s => {
       const id = s.session_id, idJs = id.replace(/'/g, "\\'");
       const name = s.title ? `${s.title}` : id;
-      const sub = s.title ? `<div class="muted">${id}</div>` : "";
-      const delBtn = `<button class="ghost mini danger" onclick="deleteSession('${idJs}', this)">Delete</button>`;
+      const sub = s.title ? `<div class="sub">${id}</div>` : "";
+      const delBtn = `<button class="mini danger" onclick="deleteSession('${idJs}', this)">Delete</button>`;
       let action;
       if (s.n_cameras >= 1) {
         const syncLabel = s.has_sync ? "Re-sync" : "Sync";
         action =
-          `<button class="ghost mini" onclick="syncSession('${idJs}', this)">${syncLabel}</button>` +
+          `<div class="actions">` +
+          `<button class="mini" onclick="syncSession('${idJs}', this)">${syncLabel}</button>` +
           `<a class="rep" href="/report?session=${encodeURIComponent(id)}" target="_blank" rel="noopener">Report</a>` +
-          delBtn +
-          `<div class="syncmsg"></div>`;
+          delBtn + `</div><div class="syncmsg"></div>`;
       } else {
-        action = '<span class="muted">no video</span> ' + delBtn;
+        action = '<div class="actions"><span class="muted">no video</span> ' + delBtn + '</div>';
       }
       return `<tr><td>${name}${sub}</td><td>${s.n_cameras}</td>` +
              `<td class="residcell">${residCell(s)}</td><td>${action}</td></tr>`;
@@ -242,65 +675,65 @@ async function loadSessions() {
   }
 }
 
-// Ask every phone to immediately re-estimate its clock offset (burst of pings).
 function resyncClocks(btn) {
-  if (!ws || ws.readyState !== 1) { alert("not connected to host"); return; }
+  if (!ws || ws.readyState !== 1) { logEvent("not connected to host", "err"); return; }
   ws.send(JSON.stringify({ type: "clock_resync" }));
+  logEvent("clock re-sync requested on all phones");
   if (btn) { const t = btn.textContent; btn.disabled = true; btn.textContent = "re-syncing…";
     setTimeout(() => { btn.disabled = false; btn.textContent = t; }, 2500); }
 }
 
-// Delete a recorded session (folder + all clips) after confirmation.
 async function deleteSession(id, btn) {
-  if (!confirm(`Delete session "${id}" and all its recordings? This cannot be undone.`)) return;
+  if (!confirm(`Delete take "${id}" and all its recordings? This cannot be undone.`)) return;
   const row = btn.closest("tr");
   btn.disabled = true; btn.textContent = "deleting…";
   try {
     const r = await fetch("/session_delete?session=" + encodeURIComponent(id),
                           { method: "POST", cache: "no-store" });
     const j = await r.json();
-    if (j.ok) { row.remove(); if (!$("sessionsBody").children.length) loadSessions(); }
-    else { btn.disabled = false; btn.textContent = "Delete"; alert("delete failed: " + (j.error || ("HTTP " + r.status))); }
+    if (j.ok) { row.remove(); logEvent("deleted " + id);
+      if (!$("sessionsBody").children.length) loadSessions(); }
+    else { btn.disabled = false; btn.textContent = "Delete";
+      logEvent("delete failed: " + (j.error || ("HTTP " + r.status)), "err"); }
   } catch (e) {
     btn.disabled = false; btn.textContent = "Delete";
-    alert("delete failed — could not reach the host");
+    logEvent("delete failed — could not reach the host", "err");
   }
 }
 
-// Run post-hoc time synchronization on a session's videos, then show the verdict inline.
 async function syncSession(id, btn) {
   const cell = btn.closest("td");
   const msg = cell.querySelector(".syncmsg");
   btn.disabled = true;
-  msg.style.color = "#e2b340";
+  msg.style.color = "var(--warn)";
   msg.textContent = "syncing… (clap cross-correlation + ffmpeg align, ~10s)";
   try {
     const r = await fetch("/sync?session=" + encodeURIComponent(id), { method: "POST", cache: "no-store" });
     const j = await r.json();
     if (!j.ok) {
-      msg.style.color = "#ef6b6b";
+      msg.style.color = "var(--err)";
       msg.textContent = "sync failed: " + (j.error || ("HTTP " + r.status));
     } else if (j.worst_residual_ms == null) {
-      msg.style.color = "#8b95a1";
+      msg.style.color = "var(--muted)";
       msg.textContent = "synced — need ≥2 cameras to measure inter-camera residual";
     } else {
       const ok = j.verdict !== "off by > one frame";
-      msg.style.color = ok ? "#5ad17a" : "#ef6b6b";
+      msg.style.color = ok ? "var(--ok)" : "var(--err)";
       msg.textContent = `synced · worst residual ${j.worst_residual_ms.toFixed(0)} ms ` +
         `(${j.verdict}; frame = ${j.frame_ms} ms). Open Report for details.`;
     }
-    // update the residual column for this row from the /sync result
-    var row = btn.closest("tr"), rc = row && row.querySelector(".residcell");
+    const row = btn.closest("tr"), rc = row && row.querySelector(".residcell");
     if (rc) rc.innerHTML = residCell({ has_sync: true, residual_ms: j.worst_residual_ms,
                                        verdict: j.verdict, frame_ms: j.frame_ms });
   } catch (e) {
-    msg.style.color = "#ef6b6b";
+    msg.style.color = "var(--err)";
     msg.textContent = "sync error — could not reach the host";
   } finally {
     btn.disabled = false;
   }
 }
 
+/* ---- capture config ----------------------------------------------------------------- */
 function applyPreset() {
   const v = $("cfgPreset").value;
   if (v === "custom") return;
@@ -308,78 +741,92 @@ function applyPreset() {
   if (m) { $("cfgW").value = m[1]; $("cfgH").value = m[2]; $("cfgFps").value = m[3]; }
 }
 function config() {
-  return { width:+$("cfgW").value, height:+$("cfgH").value,
-           fps:+$("cfgFps").value, facing:$("cfgFacing").value };
+  return { width: +$("cfgW").value, height: +$("cfgH").value,
+           fps: +$("cfgFps").value, facing: $("cfgFacing").value };
 }
-function pushConfig(){ ws.send(JSON.stringify({ type:"config", config: config() })); }
-
-async function startRec() {
-  // 1) persist session metadata, 2) trigger synchronized start
-  const body = { title:$("mTitle").value, subject:$("mSubject").value, trial:$("mTrial").value,
-    notes:$("mNotes").value, tags:$("mTags").value.split(",").map(s=>s.trim()).filter(Boolean),
-    config: config() };
-  const s = await (await fetch("/session", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify(body)})).json();
-  $("sessionState").textContent = "session: " + s.session_id;
-  ws.send(JSON.stringify({ type:"start" }));
+function pushConfig() {
+  ws.send(JSON.stringify({ type: "config", config: config() }));
+  logEvent("capture config pushed to all phones");
 }
-function stopRec(){ ws.send(JSON.stringify({ type:"stop" })); }
 
-function sendAutoSync(){ if (ws?.readyState===1)
-  ws.send(JSON.stringify({ type:"set_autosync", on: $("autoSync").checked })); }
+function sendAutoSync() { if (ws?.readyState === 1)
+  ws.send(JSON.stringify({ type: "set_autosync", on: $("autoSync").checked })); }
 
-// host pushes progress as it auto-syncs + builds the report after uploads land
+/* host pushes progress as it auto-syncs + builds the report after uploads land */
 function handleAuto(m) {
   const el = $("autoState");
   if (m.state === "running") {
-    el.style.color = "#e2b340";
+    el.style.color = "var(--warn)";
     el.textContent = `auto-processing ${m.session_id} — time sync + report…`;
+    logEvent(`auto-processing ${m.session_id}…`, "warn");
   } else if (m.state === "done") {
     const w = m.worst_residual_ms;
     const ok = m.verdict !== "off by > one frame";
-    el.style.color = (w==null) ? "#8b95a1" : (ok ? "#5ad17a" : "#ef6b6b");
-    el.textContent = (w==null)
+    el.style.color = (w == null) ? "var(--muted)" : (ok ? "var(--ok)" : "var(--err)");
+    el.textContent = (w == null)
       ? `auto-done ${m.session_id} — synced (need ≥2 cams for residual). Report ready.`
       : `auto-done ${m.session_id} — residual ${w.toFixed(0)} ms (${m.verdict}; frame ${m.frame_ms} ms). Report ready.`;
+    logEvent(`auto-done ${m.session_id}` + (w == null ? "" :
+      ` — residual ${w.toFixed(0)} ms (${m.verdict})`), ok ? "ok" : "err");
     loadSessions();
   } else if (m.state === "error") {
-    el.style.color = "#ef6b6b";
-    el.textContent = `auto-process failed for ${m.session_id}: ${m.error||""}`;
+    el.style.color = "var(--err)";
+    el.textContent = `auto-process failed for ${m.session_id}: ${m.error || ""}`;
+    logEvent(`auto-process failed for ${m.session_id}: ${m.error || ""}`, "err");
   }
 }
 
-function banner(txt, on){ const b=$("banner"); b.textContent=txt; b.style.display = on?"block":"none"; }
-function countdownTo(serverMs, label){
-  const tick = () => {
-    const left = serverMs - Date.now() - serverOffsetGuess;  // approx; control clock ~ server
-    if (left <= 0) { banner(label+" NOW", true); setTimeout(()=>banner("",false), 700); return; }
-    banner(label+" in " + (left/1000).toFixed(1) + "s", true); requestAnimationFrame(tick);
-  };
-  tick();
-}
-let serverOffsetGuess = 0;
-
+/* ---- websocket --------------------------------------------------------------------- */
 function connect() {
-  ws = new WebSocket((location.protocol==="https:"?"wss":"ws")+"://"+location.host+"/ws");
-  ws.onopen = () => { $("wsState").textContent = "connected";
-    ws.send(JSON.stringify({ type:"register", role:"control" })); sendAutoSync(); };
-  ws.onclose = () => { $("wsState").textContent = "disconnected — retrying"; setTimeout(connect,1500); };
+  ws = new WebSocket((location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/ws");
+  ws.onopen = () => { $("wsState").textContent = "connected"; $("wsState").className = "chip ok";
+    ws.send(JSON.stringify({ type: "register", role: "control" })); sendAutoSync(); };
+  ws.onclose = () => { $("wsState").textContent = "disconnected — retrying";
+    $("wsState").className = "chip err"; setTimeout(connect, 1500); };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
-    if (m.type === "hello") serverOffsetGuess = m.server_ms - Date.now();
+    if (m.type === "hello") { serverOffsetGuess = m.server_ms - Date.now(); checkVersion(m.version); }
     else if (m.type === "preview") renderPreview(m);
     else if (m.type === "auto_status") handleAuto(m);
+    else if (m.type === "upload_progress") handleUpload(m);
     else if (m.type === "roster") renderRoster(m.cameras);
-    else if (m.type === "started") { started=true; $("btnStart").disabled=true; $("btnStop").disabled=false;
-      countdownTo(m.t0_server_ms, "RECORD"); setTimeout(()=>countdownTo(m.clap_at_server_ms,"CLAP"),
-        m.t0_server_ms - Date.now() - serverOffsetGuess + 200); }
-    else if (m.type === "stopped") { started=false; $("btnStart").disabled=false; $("btnStop").disabled=true;
-      banner("",false);
-      // give uploads a few seconds to land, then refresh the recordings list
-      loadSessions(); setTimeout(loadSessions, 4000); setTimeout(loadSessions, 12000); }
+    else if (m.type === "started") {
+      armed = true; started = true; recStartServerMs = m.t0_server_ms;
+      $("btnRecord").classList.add("armed");
+      setMode("live");
+      startTcLoop();
+      countdownTo(m.t0_server_ms, "RECORD");
+      setTimeout(() => { armed = false;
+        $("btnRecord").classList.remove("armed");
+        $("btnRecord").classList.add("recording");
+        countdownTo(m.clap_at_server_ms, "CLAP");
+      }, Math.max(0, m.t0_server_ms - Date.now() - serverOffsetGuess + 200));
+      logEvent("synchronized start broadcast", "ok");
+    }
+    else if (m.type === "stopped") {
+      started = false; armed = false; recStartServerMs = null;
+      $("btnRecord").classList.remove("armed", "recording");
+      setTimecode("idle", "00:00:00.000");
+      overlay(null);
+      bumpTrial();
+      logEvent("recording stopped — waiting for uploads");
+      loadSessions(); setTimeout(loadSessions, 4000); setTimeout(loadSessions, 12000);
+    }
   };
 }
+
+/* ---- keyboard shortcuts -------------------------------------------------------------- */
+document.addEventListener("keydown", e => {
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select" || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.code === "Space") { e.preventDefault(); if (mode === "live") toggleRecord(); }
+  else if (e.code === "KeyL") setMode("live");
+  else if (e.code === "KeyE") setMode("edit");
+  else if (e.code === "KeyR") resyncClocks(null);
+});
+
 $("autoSync").onchange = sendAutoSync;
+updateTakeName();
 loadHost(); loadPairing(); connect(); loadSessions();
 </script>
 </body>

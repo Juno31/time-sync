@@ -34,8 +34,13 @@ WEB = ROOT / "web"
 SESSIONS = ROOT / "sessions"
 SESSIONS.mkdir(exist_ok=True)
 
+# Reported in /health, /host and the WS hello so the control UI can detect a stale
+# host process serving old code (a recurring source of confusion — see CLAUDE.md backlog).
+APP_VERSION = "2026.06.11b"
+
 # Synchronized-trigger lead times (ms), in server-clock terms.
-START_LEAD_MS = 3000     # phones begin recording this far in the future
+START_LEAD_MS = 3000     # default; the control UI can override per recording (lead_ms)
+MIN_LEAD_MS, MAX_LEAD_MS = 1000, 30000
 COUNTDOWN_MS = 5000      # clap countdown window after start
 
 
@@ -216,6 +221,7 @@ async def health(request):
     return web.json_response({
         "status": "ok",
         "service": "camera-time-sync",
+        "version": APP_VERSION,
         "server_ms": now_ms(),
         "cameras": len(hub.cameras),
         "controls": len(hub.controls),
@@ -238,8 +244,13 @@ async def qr(request):
     buf = segno.make(data, error="m")
     import io
     out = io.BytesIO()
-    buf.save(out, kind="svg", scale=6, border=2)
-    return web.Response(body=out.getvalue(), content_type="image/svg+xml")
+    # omitsize + an explicit viewBox make the SVG scale to whatever box the UI puts it
+    # in. segno's default fixed width/height (and no viewBox) CROPS the drawing when the
+    # container is smaller than the native size — an unscannable, clipped QR.
+    buf.save(out, kind="svg", scale=6, border=2, omitsize=True)
+    w, h = buf.symbol_size(scale=6, border=2)
+    svg = out.getvalue().replace(b"<svg ", f'<svg viewBox="0 0 {w} {h}" '.encode(), 1)
+    return web.Response(body=svg, content_type="image/svg+xml")
 
 
 async def pairing_info(request):
@@ -328,6 +339,7 @@ async def host_status(request):
         "scheme": "https" if request.app["tls"] else "http",
         "https": request.app["tls"],
         "mkcert_available": bool(_sh.which("mkcert")),
+        "version": APP_VERSION,
     }, headers=NO_CACHE)
 
 
@@ -492,6 +504,15 @@ async def upload(request):
         h = hashlib.sha256(path.read_bytes()).hexdigest()
         result["sha256"] = h
         result["verified"] = (h == expected_sha)
+    # let control UIs show live upload progress + data rate (Motive-style control deck)
+    try:
+        total = int(request.headers.get("X-Total", "0"))
+    except ValueError:
+        total = 0
+    await hub.broadcast_controls({
+        "type": "upload_progress", "session_id": sid, "device": device,
+        "filename": fname, "size": size, "total": total, "received": len(data),
+        "final": final, "verified": result.get("verified")})
     return web.json_response(result)
 
 
@@ -520,7 +541,8 @@ async def ws_handler(request):
                     first = len(hub.controls) == 0
                     hub.controls.add(ws)
                     await ws.send_json({"type": "hello", "server_ms": now_ms(),
-                                        "start_lead_ms": START_LEAD_MS})
+                                        "start_lead_ms": START_LEAD_MS,
+                                        "version": APP_VERSION})
                     await hub.push_roster()
                     if first:
                         await hub.set_preview(True)  # someone is watching -> cameras start previewing
@@ -591,7 +613,12 @@ async def ws_handler(request):
                 hub.autosync = bool(m.get("on", True))
             elif t == "start":
                 hub.participants = set()  # reset for the new recording
-                t0 = now_ms() + START_LEAD_MS
+                try:
+                    lead = float(m.get("lead_ms") or START_LEAD_MS)
+                except (TypeError, ValueError):
+                    lead = START_LEAD_MS
+                lead = max(MIN_LEAD_MS, min(MAX_LEAD_MS, lead))
+                t0 = now_ms() + lead
                 await hub.broadcast_cameras({
                     "type": "start",
                     "session_id": (hub.session or {}).get("session_id"),
@@ -666,15 +693,19 @@ def main():
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8443)
     ap.add_argument("--certs", default="certs")
+    ap.add_argument("--no-https", action="store_true",
+                    help="serve plain HTTP and skip cert auto-creation (tests / local dev; "
+                         "iOS camera will NOT work)")
     ap.add_argument("--open", action="store_true", help="open the control UI in a browser on startup")
     args = ap.parse_args()
 
     certs = ROOT / args.certs
     lan = lan_ip()
-    ensure_cert(certs, lan)  # auto-create/refresh the cert for this network (no terminal)
+    if not args.no_https:
+        ensure_cert(certs, lan)  # auto-create/refresh the cert for this network (no terminal)
     cert_pem, key_pem = certs / "cert.pem", certs / "key.pem"
     ssl_ctx = None
-    if cert_pem.exists() and key_pem.exists():
+    if not args.no_https and cert_pem.exists() and key_pem.exists():
         ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_ctx.load_cert_chain(str(cert_pem), str(key_pem))
 

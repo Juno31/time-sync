@@ -12,7 +12,9 @@ PY="$(command -v python3)"
 [ -x ./.venv/bin/python ] && PY=./.venv/bin/python
 
 echo "=== starting host on :$PORT (HTTP) ==="
-"$PY" app.py --port "$PORT" --certs /tmp/__nocerts__ >/tmp/cts_app.log 2>&1 &
+# --no-https: the host otherwise auto-creates a mkcert cert and serves HTTPS,
+# while the smoke checks connect over plain HTTP.
+"$PY" app.py --port "$PORT" --no-https >/tmp/cts_app.log 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null' EXIT
 for i in $(seq 1 15); do sleep 1; curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; done
