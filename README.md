@@ -20,29 +20,18 @@ and **Windows** subsections.
 
 ## Features
 
-- **Motive-style control UI** — the control surface is laid out like OptiTrack Motive: a Devices pane
-  (per-camera status, resolution, fps, clock offset/jitter, upload progress), a Cameras viewport with live
-  previews and an on-screen countdown/CLAP cue, Capture & Take properties panes, and a bottom Control Deck
-  with **LIVE | EDIT** modes, the take name, a record button, a running timecode, a configurable start
-  **Delay**, a live **Data rate**, and an event log. Shortcuts: `Space` record/stop, `L`/`E` switch modes,
-  `R` re-sync clocks.
-- **Browser-only phone client** — pair an iPhone by scanning a QR code in Safari; no App Store, no profiles
-  beyond a one-time local cert.
-- **Synchronized trigger** — the host arms all phones to start at a shared future timestamp and prompts a clap.
-- **Stale-host detection** — the host reports its version (`/health`, `/host`, WebSocket hello) and the UI
-  warns when the running host predates the page (or vice versa).
-- **Automatic sync + report on upload** — when every camera that recorded a session finishes uploading, the
-  host runs the time-sync and builds that session's report automatically (toggleable). Or trigger it manually
-  per recording with **Sync** / **Report** buttons.
-- **Rich per-recording report** — inter-camera sync error vs the frame period, a **synchronized side-by-side
-  player** of the aligned clips, the clap-detection diagnostic (audio envelopes + cross-correlation curve with
-  a live playback cursor), a capture table, and an independent audio-vs-timestamp cross-check — all in the browser.
-- **Post-hoc alignment** — audio-clap cross-correlation (primary) + per-frame timestamps (cross-check),
-  resampled to a common constant frame rate (**your configured capture fps**) with ffmpeg.
-- **Readable session folders** — named from your inputs as `title_subject_trial` (falls back to a timestamp).
-- **OpenCap-compatible output** — for downstream 3D reconstruction in
+- **Motive-style control UI** — Devices pane, live camera viewport with countdown/CLAP cue, properties
+  panes, and a **LIVE | EDIT** control deck (record button, timecode, start delay, data rate, event log).
+- **Browser-only phones** — pair iPhones by QR in Safari; no app, just a one-time local cert.
+- **Synchronized trigger** — all phones start at a shared timestamp, then a clap prompt.
+- **Auto sync + report** — when uploads finish, the host aligns the clips (audio-clap cross-correlation
+  + ffmpeg resample to your capture fps) and builds the report; also triggerable per take.
+- **Per-recording report** — sync residual vs frame period, synchronized side-by-side player, and
+  clap-detection diagnostics, all in the browser.
+- **OpenCap-compatible output** — ready for
   [opencap-core](https://github.com/stanfordnmbl/opencap-core) / [Pose2Sim](https://github.com/perfanalytics/pose2sim).
-- **Minimal stack** — one aiohttp process, vanilla HTML/JS, filesystem only. No database, framework, or build step.
+- **Minimal stack** — one aiohttp process, vanilla HTML/JS, filesystem only; sessions saved as
+  `title_subject_trial` folders. Stale-host version warning built in.
 
 ---
 
